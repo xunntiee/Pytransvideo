@@ -69,6 +69,23 @@ class Worker(QThread):
             if self._exit(): return
 
             # 需要配音时
+            # Pause for editing translated subtitles before hard-sub rendering when no dubbing is requested.
+            if (
+                    trk.should_hebing
+                    and trk.cfg.subtitle_type > 0
+                    and not trk.should_dubbing
+                    and vail_file(trk.cfg.target_sub)
+                    and float(settings.get('countdown_sec', 0)) > 0
+            ):
+                self._post(text=Path(trk.cfg.target_sub).read_text(encoding='utf-8'), type='replace_subtitle')
+                app_cfg.set_countdown(86400)
+                self._post(text=trk.cfg.target_sub, type='edit_subtitle_target_plain')
+                self._post(tr('The subtitle editing interface is rendering'))
+                while app_cfg.task_countdown > 0:
+                    if self._exit(): return
+                    time.sleep(1)
+                    app_cfg.set_countdown(app_cfg.task_countdown - 1)
+
             if trk.should_dubbing:
 
                 self._post(text=Path(trk.cfg.target_sub).read_text(encoding='utf-8'), type='replace_subtitle')

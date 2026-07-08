@@ -183,6 +183,7 @@ class WinActionBaseModeMixin:
         self.main.tts_type.setDisabled(type)
         self.main.model_name.setDisabled(type)
         self.main.subtitle_type.setDisabled(type)
+        self.main.blur_old_subs.setDisabled(type)
         self.main.enable_cuda.setDisabled(type)
         self.main.recogn_type.setDisabled(type)
         self.main.voice_autorate.setDisabled(type)

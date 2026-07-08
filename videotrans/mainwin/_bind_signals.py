@@ -14,6 +14,7 @@ class BindSignalsMixin:
         self.voice_autorate.toggled.connect(self.win_action.check_voice_autorate)
         self.video_autorate.toggled.connect(self.win_action.check_video_autorate)
         self.enable_cuda.toggled.connect(self.win_action.check_cuda)
+        self.cn_vi_hardsub_preset.clicked.connect(self.win_action.apply_cn_vi_hardsub_preset)
         self.tts_type.currentIndexChanged.connect(self.win_action.tts_type_change)
 
         self.translate_type.currentIndexChanged.connect(self.win_action.set_translate_type)
@@ -130,6 +131,7 @@ class BindSignalsMixin:
         self.import_sub.setCursor(Qt.PointingHandCursor)
         self.startbtn.setCursor(Qt.PointingHandCursor)
         self.btn_get_video.setCursor(Qt.PointingHandCursor)
+        self.cn_vi_hardsub_preset.setCursor(Qt.PointingHandCursor)
         self.btn_save_dir.setCursor(Qt.PointingHandCursor)
         self.listen_btn.setCursor(Qt.PointingHandCursor)
         self.statusLabel.setCursor(Qt.PointingHandCursor)

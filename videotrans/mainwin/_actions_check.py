@@ -148,6 +148,7 @@ class WinActionCheckMixin:
         self.cfg['remove_noise'] = self.main.remove_noise.isChecked()
 
         self.cfg['subtitle_type'] = self.main.subtitle_type.currentIndex()
+        self.cfg['blur_old_subs'] = self.main.blur_old_subs.isChecked()
 
         self.cfg['voice_rate'] = self.main.voice_rate.value()
         try:

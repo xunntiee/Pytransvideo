@@ -16,6 +16,7 @@ from videotrans.configure.contants import (
 
 # Module-level reference to settings singleton, set by config.py
 _settings_ref = None
+GEMINI_INDEX = 5
 
 
 def set_settings_ref(settings):
@@ -32,6 +33,8 @@ class AppParams:
 
     def __post_init__(self):
         self.getset_params()
+        if self._apply_env_secrets():
+            self._save_to_disk()
 
     def save(self, data: Dict = None):
         if data:
@@ -47,7 +50,7 @@ class AppParams:
         default = self._get_defaults()
         if Path(self._json_path).exists():
             try:
-                loaded = json.loads(Path(self._json_path).read_text(encoding='utf-8'))
+                loaded = json.loads(Path(self._json_path).read_text(encoding='utf-8-sig'))
                 default.update(loaded)
             except (OSError, json.JSONDecodeError):
                 pass
@@ -61,8 +64,8 @@ class AppParams:
     def _get_defaults(self):
         _settings = _settings_ref
         return {
-            "last_opendir": os.path.expanduser("~"),
-            "output_dir": "",
+            "last_opendir": f"{ROOT_DIR}/input",
+            "output_dir": f"{ROOT_DIR}/output",
             "is_cuda": False,
             "line_roles": {},
             "rephrase": 0,
@@ -73,12 +76,13 @@ class AppParams:
             "enable_diariz": False,
             "nums_diariz": 0,
             "target_dir": "",
-            "source_language": "en",
-            "target_language": "zh-cn",
-            "translate_type": 0,
+            "source_language": "Simplified Chinese",
+            "target_language": "Vietnamese",
+            "translate_type": GEMINI_INDEX,
             "subtitle_type": 1,
+            "blur_old_subs": True,
             "tts_type": 0,
-            "model_name": "large-v3-turbo",
+            "model_name": "tiny",
             "recogn_type": 0,
             "fix_punc": 0,
             "stt_fix_punc": 0,
@@ -226,7 +230,7 @@ class AppParams:
             "stt_nums_diariz": 0,
             "subtitlecover_outformat": "srt",
             "deepgram_apikey": "",
-            "trans_translate_type": 0,
+            "trans_translate_type": GEMINI_INDEX,
             "trans_source_language": 0,
             "trans_target_language": 1,
             "trans_out_format": 0,
@@ -238,12 +242,31 @@ class AppParams:
             "dubb_hecheng_rate": 0,
             "dubb_pitch_rate": 0,
             "dubb_volume_rate": 0,
-            "recogn2pass": False
+            "recogn2pass": False,
+            "source_language_code": "zh-cn",
+            "target_language_code": "vi",
+            "only_out_mp4": False,
+            "volume": "+0%",
+            "pitch": "+0Hz",
+            "background_music": "",
+            "remove_silent_mid": False,
+            "copysrt_rawvideo": False,
+            "output_srt": 0,
+            "loop_backaudio": 1,
+            "backaudio_volume": 0.8,
+            "select_file_type": False
         }
 
     def _apply_dict(self, data: Dict):
         for k, v in data.items():
             setattr(self, k, v)
+
+    def _apply_env_secrets(self) -> bool:
+        gemini_key = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
+        if gemini_key and not str(getattr(self, "gemini_key", "")).strip():
+            self.gemini_key = gemini_key
+            return True
+        return False
 
     def to_dict(self) -> Dict:
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}

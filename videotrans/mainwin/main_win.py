@@ -146,6 +146,7 @@ class MainWindow(BindSignalsMixin, WinformMixin, LifecycleMixin, QMainWindow, Ui
         self.rephrase.setCurrentIndex(int(params.get('rephrase', 0)))
         self.remove_noise.setChecked(bool(params.get('remove_noise')))
         self.copysrt_rawvideo.setChecked(bool(params.get('copysrt_rawvideo', False)))
+        self.blur_old_subs.setChecked(bool(params.get('blur_old_subs', False)))
         self.bgmvolume.setText(str(settings.get('backaudio_volume', 0.8)))
         self.is_loop_bgm.setCurrentIndex(int(settings.get('loop_backaudio', 0)))
 

@@ -1,9 +1,44 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import os, json, re
 from pathlib import Path
 
 from videotrans.configure.config import ROOT_DIR, logger
 from videotrans.util._srt_parse import get_subtitle_from_srt
+
+
+DEFAULT_HARDSUB_STYLE = {
+    'Name': 'Default',
+    'Fontname': 'Segoe UI',
+    'Bottom_Fontname': 'Segoe UI',
+    'Fontsize': 17,
+    'Bottom_Fontsize': 17,
+    'PrimaryColour': '&H00FFFFFF&',
+    'Bottom_PrimaryColour': '&H00FFFFFF&',
+    'SecondaryColour': '&H00FFFFFF&',
+    'OutlineColour': '&H00000000&',
+    'BackColour': '&H00000000&',
+    'Bold': -1,
+    'Italic': 0,
+    'Bottom_SecondaryColour': '&H00FFFFFF&',
+    'Bottom_OutlineColour': '&H00000000&',
+    'Bottom_BackColour': '&H00000000&',
+    'Bottom_Bold': -1,
+    'Bottom_Italic': 0,
+    'Underline': 0,
+    'StrikeOut': 0,
+    'ScaleX': 100,
+    'ScaleY': 100,
+    'Spacing': 0,
+    'Angle': 0,
+    'BorderStyle': 1,
+    'Outline': 1.4,
+    'Shadow': 0.4,
+    'Alignment': 2,
+    'MarginL': 18,
+    'MarginR': 18,
+    'MarginV': 145,
+    'Encoding': 1
+}
 
 
 def set_ass_font(srtfile: str) -> str:
@@ -31,16 +66,13 @@ def set_ass_font(srtfile: str) -> str:
     help_ffmpeg.runffmpeg(['-y', '-i', edit_srt, ass_file_path])
 
     JSON_FILE = f'{ROOT_DIR}/videotrans/ass.json'
-    if not os.path.exists(JSON_FILE):
-        logger.debug(f"[set_ass_font] 未修改硬字幕样式，跳过样式替换")
-        return ass_file_path
-
-    try:
-        with open(JSON_FILE, 'r', encoding='utf-8-sig') as f:
-            style = json.load(f)
-    except Exception as e:
-        logger.exception(f"[set_ass_font] 错误：无法读取或解析 JSON 文件 {JSON_FILE}: {e}", exc_info=True)
-        return ass_file_path
+    style = DEFAULT_HARDSUB_STYLE.copy()
+    if os.path.exists(JSON_FILE):
+        try:
+            with open(JSON_FILE, 'r', encoding='utf-8-sig') as f:
+                style.update(json.load(f))
+        except Exception as e:
+            logger.exception(f"[set_ass_font] failed to read style file {JSON_FILE}: {e}", exc_info=True)
 
     default_style = (
         f"Style: {style.get('Name', 'Default')},"
@@ -78,7 +110,7 @@ def set_ass_font(srtfile: str) -> str:
 
     bottom_style = (
         f"Style: Bottom,"
-        f"{style.get('Fontname', 'Arial')},"
+        f"{style.get('Bottom_Fontname', style.get('Fontname', 'Segoe UI'))},"
         f"{bottom_fontsize},"
         f"{bottom_color},"
         f"{bottom_secondarycolour},"
@@ -106,7 +138,7 @@ def set_ass_font(srtfile: str) -> str:
         with open(ass_file_path, 'r', encoding='utf-8-sig') as f:
             content = f.read()
     except Exception as e:
-        logger.exception(f"[set_ass_font] 错误：无法读取 ASS 文件: {e}", exc_info=True)
+        logger.exception(f"[set_ass_font] é”™è¯¯ï¼šæ— æ³•è¯»å– ASS æ–‡ä»¶: {e}", exc_info=True)
         return ass_file_path
 
     pattern = r'(^\[V4\+ Styles\]\s*\r?\n' \
@@ -127,7 +159,7 @@ def set_ass_font(srtfile: str) -> str:
     try:
         new_content, _ = re.subn(pattern, replacer, content, flags=re.MULTILINE)
     except Exception as e:
-        logger.exception(f"[set_ass_font] 错误：正则替换样式失败: {e}", exc_info=True)
+        logger.exception(f"[set_ass_font] é”™è¯¯ï¼šæ­£åˆ™æ›¿æ¢æ ·å¼å¤±è´¥: {e}", exc_info=True)
         return ass_file_path
 
     lines = new_content.splitlines(keepends=True)
@@ -162,6 +194,6 @@ def set_ass_font(srtfile: str) -> str:
         with open(ass_file_path, 'w', encoding='utf-8', newline='') as f:
             f.writelines(processed_lines)
     except Exception as e:
-        logger.exception(f"[set_ass_font] 错误：无法写入 ASS 文件: {e}", exc_info=True)
+        logger.exception(f"[set_ass_font] é”™è¯¯ï¼šæ— æ³•å†™å…¥ ASS æ–‡ä»¶: {e}", exc_info=True)
 
     return ass_file_path

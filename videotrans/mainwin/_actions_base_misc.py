@@ -75,8 +75,9 @@ class WinActionBaseMiscMixin:
         return True
 
     def listen_voice_fun(self):
-        from videotrans import translator
+        from videotrans import translator, tts
         from videotrans.util.ListenVoice import ListenVoice
+        from videotrans.util import tools
         lang = translator.get_code(show_text=self.main.target_language.currentText())
         if not lang:
             return show_error(
@@ -88,6 +89,16 @@ class WinActionBaseMiscMixin:
         role = self.main.voice_role.currentText()
         if not role or role == 'No':
             return show_error(tr('mustberole'))
+        if self.main.tts_type.currentIndex() == tts.EDGE_TTS and not tools.get_edge_rolelist(role, lang):
+            return show_error(
+                f"Voice '{role}' is not available for language '{self.main.target_language.currentText()}'. "
+                "Please choose another voice or set Select Voice to No."
+            )
+        if self.main.tts_type.currentIndex() == tts.AZURE_TTS and not tools.get_azure_rolelist(lang.split('-')[0], role):
+            return show_error(
+                f"Voice '{role}' is not available for Azure-TTS language '{self.main.target_language.currentText()}'. "
+                "Please choose another Azure voice or set Select Voice to No."
+            )
 
         voice_dir = tempfile.gettempdir() + '/pyvideotrans'
         if not Path(voice_dir).exists():

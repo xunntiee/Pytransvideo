@@ -260,6 +260,19 @@ class WinActionTaskMixin:
             else:
                 self.update_status('stop')
             return
+        if d['type'] == 'edit_subtitle_target_plain':
+            from videotrans.component.onlyone_set_recogn import EditRecognResultDialog
+
+            dialog = EditRecognResultDialog(
+                source_sub=d.get('text') or app_cfg.onlyone_target_sub,
+                parent=self.main
+            )
+
+            if dialog.exec():
+                self.set_djs_timeout()
+            else:
+                self.update_status('stop')
+            return
         if d['type'] == 'edit_subtitle_target':
             from videotrans.component.onlyone_set_role import SpeakerAssignmentDialog
             cache_folder, target_language, tts_type = d['text'].split('<|>')

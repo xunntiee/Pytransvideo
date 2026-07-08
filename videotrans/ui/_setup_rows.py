@@ -19,6 +19,13 @@ def _create_file_row(ui, parent):
     ui.source_mp4.setMaximumWidth(100)
     ui.source_mp4.setObjectName("source_mp4")
 
+    ui.cn_vi_hardsub_preset = QtWidgets.QPushButton(parent)
+    ui.cn_vi_hardsub_preset.setMinimumSize(QtCore.QSize(130, 30))
+    ui.cn_vi_hardsub_preset.setObjectName("cn_vi_hardsub_preset")
+    ui.cn_vi_hardsub_preset.setText("CN->VI Hard-sub")
+    ui.cn_vi_hardsub_preset.setToolTip(
+        "Apply preset: local Chinese video to Vietnamese hard subtitles. Uses Gemini when a key is configured, otherwise Google Free.")
+
     ui.clear_cache = QtWidgets.QCheckBox(parent)
     ui.clear_cache.setMinimumSize(QtCore.QSize(50, 20))
     ui.clear_cache.setObjectName("clear_cache")
@@ -33,6 +40,7 @@ def _create_file_row(ui, parent):
         tr("Multiple files can be selected by default, check the box to select folders"))
 
     layout.addWidget(ui.btn_get_video)
+    layout.addWidget(ui.cn_vi_hardsub_preset)
     layout.addWidget(ui.select_file_type)
     layout.addWidget(ui.clear_cache)
     layout.addWidget(ui.source_mp4)
@@ -228,12 +236,18 @@ def _create_alignment_row(ui, parent):
     ui.subtitle_type.setMinimumSize(QtCore.QSize(150, 30))
     ui.subtitle_type.setObjectName("subtitle_type")
 
+    ui.blur_old_subs = QtWidgets.QCheckBox(parent)
+    ui.blur_old_subs.setObjectName("blur_old_subs")
+    ui.blur_old_subs.setText("Blur old subs")
+    ui.blur_old_subs.setToolTip("Blur the bottom area of the video before burning new hard subtitles")
+
     layout.addWidget(ui.align_btn)
     layout.addWidget(ui.voice_autorate)
     layout.addWidget(ui.video_autorate)
     layout.addWidget(ui.remove_silent_mid)
     layout.addWidget(ui.align_sub_audio)
     layout.addWidget(ui.subtitle_type)
+    layout.addWidget(ui.blur_old_subs)
 
     ui.set_adv_status = QtWidgets.QPushButton()
     ui.set_adv_status.setText(tr('More settings'))
