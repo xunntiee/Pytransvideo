@@ -35,6 +35,10 @@ class WinActionConfigMixin:
         self.main.only_out_mp4.setChecked(False)
         self.main.voice_autorate.setChecked(True)
         self.main.video_autorate.setChecked(False)
+        if hasattr(self.main, "sync_strategy"):
+            self.main.sync_strategy.setCurrentIndex(max(0, self.main.sync_strategy.findData("audio")))
+        if hasattr(self.main, "sync_snap_frame"):
+            self.main.sync_snap_frame.setChecked(True)
         self.main.select_file_type.setChecked(False)
         self.main.target_dir = output_dir
         self.main.btn_save_dir.setToolTip(output_dir)
@@ -57,6 +61,8 @@ class WinActionConfigMixin:
             "recogn_type": recognition.FASTER_WHISPER,
             "voice_autorate": True,
             "video_autorate": False,
+            "tts_sync_strategy": "audio",
+            "tts_sync_snap_frame": True,
             "align_sub_audio": True,
             "voice_role": "No",
             "only_out_mp4": False,

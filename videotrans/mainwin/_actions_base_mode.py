@@ -54,6 +54,8 @@ class WinActionBaseModeMixin:
         self.main.label_6.show()
         self.main.voice_autorate.show()
         self.main.video_autorate.show()
+        self.main.sync_strategy.show()
+        self.main.sync_snap_frame.show()
 
         self.main.output_srt_label.hide()
         self.main.output_srt.hide()
@@ -115,6 +117,8 @@ class WinActionBaseModeMixin:
         self.main.voice_rate.hide()
         self.main.voice_autorate.hide()
         self.main.video_autorate.hide()
+        self.main.sync_strategy.hide()
+        self.main.sync_snap_frame.hide()
         self.main.output_srt.show()
         self.main.output_srt_label.show()
 
@@ -188,6 +192,8 @@ class WinActionBaseModeMixin:
         self.main.recogn_type.setDisabled(type)
         self.main.voice_autorate.setDisabled(type)
         self.main.video_autorate.setDisabled(type)
+        self.main.sync_strategy.setDisabled(type)
+        self.main.sync_snap_frame.setDisabled(type)
         self.main.voice_role.setDisabled(type)
         self.main.voice_rate.setDisabled(type)
         self.main.is_loop_bgm.setDisabled(type)
@@ -207,5 +213,7 @@ class WinActionBaseModeMixin:
         self.main.select_file_type.setDisabled(type)
         self.main.is_separate.setDisabled(type)
         self.main.embed_bgm.setDisabled(type)
+        if not type and hasattr(self.main, "sync_strategy"):
+            self.sync_strategy_change(self.main.sync_strategy.currentIndex())
         self.main.addbackbtn.setDisabled(True if self.main.app_mode in ['tiqu'] else type)
         self.main.back_audio.setReadOnly(True if self.main.app_mode in ['tiqu'] else type)

@@ -118,6 +118,9 @@ def _setup_actions_and_menus(ui, MainWindow):
     ui.action_biaozhun.setChecked(True)
     ui.action_biaozhun.setObjectName("action_biaozhun")
 
+    _make_action(ui, "action_download_url")
+    _make_action(ui, "action_download_channel")
+    _make_action(ui, "action_download_search")
     _make_action(ui, "action_yuyinshibie")
     _make_action(ui, "action_yuyinhecheng")
 
@@ -180,7 +183,8 @@ def _setup_actions_and_menus(ui, MainWindow):
     ])
 
     _fill_menu(ui.menu, [
-        ui.actionsetini, ui.action_clipvideo, ui.actionwatermark,
+        ui.actionsetini, ui.action_download_url, ui.action_download_channel, ui.action_download_search,
+        ui.action_clipvideo, ui.actionwatermark,
         ui.action_realtime_stt, ui.action_textmatching, ui.action_yingyinhebing,
         ui.actionvideoandaudio, ui.actionvideoandsrt, ui.actionformatcover,
         ui.actionsubtitlescover, ui.actionsrtmultirole, ui.action_yinshipinfenli,
@@ -202,6 +206,9 @@ def _setup_actions_and_menus(ui, MainWindow):
     ui.menuBar.addAction(ui.menu_H.menuAction())
 
     ui.toolBar.addAction(ui.action_biaozhun)
+    ui.toolBar.addAction(ui.action_download_url)
+    ui.toolBar.addAction(ui.action_download_channel)
+    ui.toolBar.addAction(ui.action_download_search)
     ui.toolBar.addAction(ui.action_tiquzimu)
     ui.toolBar.addAction(ui.action_yuyinshibie)
     ui.toolBar.addAction(ui.action_fanyi)

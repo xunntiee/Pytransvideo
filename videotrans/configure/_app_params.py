@@ -89,6 +89,8 @@ class AppParams:
             "voice_autorate": True,
             "video_autorate": False,
             "align_sub_audio": True,
+            "tts_sync_strategy": "auto",
+            "tts_sync_snap_frame": True,
             "voice_role": "No",
             "voice_rate": "0",
             "deepl_authkey": "",

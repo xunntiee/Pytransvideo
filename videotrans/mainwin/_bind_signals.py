@@ -13,6 +13,7 @@ class BindSignalsMixin:
         self.addbackbtn.clicked.connect(self.win_action.get_background)
         self.voice_autorate.toggled.connect(self.win_action.check_voice_autorate)
         self.video_autorate.toggled.connect(self.win_action.check_video_autorate)
+        self.sync_strategy.currentIndexChanged.connect(self.win_action.sync_strategy_change)
         self.enable_cuda.toggled.connect(self.win_action.check_cuda)
         self.cn_vi_hardsub_preset.clicked.connect(self.win_action.apply_cn_vi_hardsub_preset)
         self.tts_type.currentIndexChanged.connect(self.win_action.tts_type_change)
@@ -38,6 +39,9 @@ class BindSignalsMixin:
 
         self.glossary.clicked.connect(lambda: show_glossary_editor(self))
         self.action_biaozhun.triggered.connect(self.win_action.set_biaozhun)
+        self.action_download_url.triggered.connect(lambda: self.open_winform('download_url'))
+        self.action_download_channel.triggered.connect(lambda: self.open_winform('download_channel'))
+        self.action_download_search.triggered.connect(lambda: self.open_winform('download_search'))
         self.action_tiquzimu.triggered.connect(self.win_action.set_tiquzimu)
 
         self.actionbaidu_key.triggered.connect(lambda: self.open_winform('baidu'))
@@ -85,6 +89,7 @@ class BindSignalsMixin:
         self.actiontts_gradiowin.triggered.connect(lambda: self.open_winform('gradiowin'))
         self.actiontts_refaudio.triggered.connect(lambda: self.open_winform('refaudio'))
         self.actiontts_doubao2.triggered.connect(lambda: self.open_winform('doubao2'))
+        self.win_action.sync_strategy_change(self.sync_strategy.currentIndex())
         self.actionzhipuai_key.triggered.connect(lambda: self.open_winform('zhipuai'))
         self.actiondeepseek_key.triggered.connect(lambda: self.open_winform('deepseek'))
         self.actionminimax_key.triggered.connect(lambda: self.open_winform('minimax'))

@@ -1,4 +1,6 @@
 # 原理解释见 @docs/Synchronize.md
+import csv
+import json
 import os
 import shutil
 import time
@@ -234,9 +236,13 @@ class SpeedRate:
                  target_audio=None,
                  cache_folder=None,
                  remove_silent_mid=False,
-                 align_sub_audio=True
-                 ):
+                 align_sub_audio=True,
+                 sync_strategy="auto",
+                 snap_to_frame=False
+                  ):
         self.align_sub_audio = align_sub_audio
+        self.sync_strategy = sync_strategy or "auto"
+        self.snap_to_frame = bool(snap_to_frame)
         self.raw_total_time = raw_total_time if raw_total_time is not None else 0
         self.remove_silent_mid = remove_silent_mid
         self.queue_tts = queue_tts
@@ -246,8 +252,7 @@ class SpeedRate:
         self.uuid = uuid
         self.novoice_mp4_original = novoice_mp4
         self.novoice_mp4 = novoice_mp4
-        self.cache_folder = cache_folder if cache_folder else Path(
-            f'{config.TEMP_DIR}/{str(uuid if uuid else time.time())}').as_posix()
+        self.cache_folder = Path(cache_folder if cache_folder else f'{config.TEMP_DIR}/{str(uuid if uuid else time.time())}').resolve().as_posix()
         Path(self.cache_folder).mkdir(parents=True, exist_ok=True)
 
         self.stop_show_process = False
@@ -265,6 +270,9 @@ class SpeedRate:
 
         self.audio_data = [] 
         self.video_for_clips = [] 
+        self.sync_report = []
+        self.sync_report_json = Path(self.cache_folder, "tts_sync_report.json").as_posix()
+        self.sync_report_csv = Path(self.cache_folder, "tts_sync_report.csv").as_posix()
 
         self.crf = "20"
         self.preset = "veryfast"
@@ -280,6 +288,16 @@ class SpeedRate:
             pass
 
         self.audio_speed_rubberband = shutil.which("rubberband")
+        self.video_fps = 0
+        self.frame_ms = 0
+        if self.snap_to_frame and self.novoice_mp4_original and Path(self.novoice_mp4_original).exists():
+            try:
+                self.video_fps = float(tools.get_video_info(self.novoice_mp4_original, video_fps=True) or 0)
+                if self.video_fps > 0:
+                    self.frame_ms = 1000.0 / self.video_fps
+            except Exception as e:
+                logger.warning(f"[SpeedRate] Frame snap disabled, cannot read FPS: {e}")
+                self.snap_to_frame = False
         logger.debug(f"[SpeedRate] Init. AudioRate={self.should_audiorate}, VideoRate={self.should_videorate}, Rubberband={bool(self.audio_speed_rubberband)}")
         if not HAS_RUBBERBAND or not self.audio_speed_rubberband:
             logger.warning(f"[SpeedRate] Rubberband 不可用，将使用pydub+ffmpeg处理音频加速。\n建议安装，加速效果更佳\n{INSTALL_RUBBERBAND_TIPS}")
@@ -290,6 +308,7 @@ class SpeedRate:
         if not self.should_audiorate and not self.should_videorate:
             logger.debug("[SpeedRate] 未启用变速，进入普通拼接模式。")
             self._run_no_rate_change_mode()
+            self._write_sync_report()
             return self.queue_tts
         
         logger.debug("[SpeedRate] 启用变速，进入对齐模式。")
@@ -337,8 +356,55 @@ class SpeedRate:
         # 5. 音频对齐拼接
         tools.set_process(text='Concatenating final audio...', uuid=self.uuid)
         self._concat_audio_aligned()
+        self._write_sync_report()
 
         return self.queue_tts
+
+    def _snap_ms(self, value, minimum=0):
+        if not self.snap_to_frame or not self.frame_ms:
+            return int(value or 0)
+        snapped = int(round(float(value or 0) / self.frame_ms) * self.frame_ms)
+        return max(int(minimum), snapped)
+
+    def _report_row(self, item, *, source_duration, dubb_duration, audio_target, video_target, mode, note=""):
+        source_duration = max(0, int(source_duration or 0))
+        dubb_duration = max(0, int(dubb_duration or 0))
+        audio_target = max(0, int(audio_target or 0))
+        video_target = max(0, int(video_target or 0))
+        audio_speed = round(dubb_duration / audio_target, 4) if audio_target else 0
+        video_pts = round(video_target / source_duration, 4) if source_duration else 0
+        row = {
+            "line": item.get("line"),
+            "text": item.get("text", ""),
+            "strategy": self.sync_strategy,
+            "mode": mode,
+            "start_ms": int(item.get("start_time", 0) or 0),
+            "end_ms": int(item.get("end_time", 0) or 0),
+            "slot_ms": source_duration,
+            "tts_ms": dubb_duration,
+            "audio_target_ms": audio_target,
+            "video_target_ms": video_target,
+            "audio_speed": audio_speed,
+            "video_pts": video_pts,
+            "snap_to_frame": bool(self.snap_to_frame),
+            "fps": round(self.video_fps, 3) if self.video_fps else 0,
+            "note": note,
+        }
+        self.sync_report.append(row)
+
+    def _write_sync_report(self):
+        if not self.sync_report:
+            return
+        try:
+            Path(self.cache_folder).mkdir(parents=True, exist_ok=True)
+            Path(self.sync_report_json).write_text(json.dumps(self.sync_report, ensure_ascii=False, indent=2), encoding="utf-8")
+            with open(self.sync_report_csv, "w", encoding="utf-8-sig", newline="") as file_obj:
+                writer = csv.DictWriter(file_obj, fieldnames=list(self.sync_report[0].keys()))
+                writer.writeheader()
+                writer.writerows(self.sync_report)
+            logger.debug(f"[SpeedRate] Sync report written: {self.sync_report_csv}")
+        except Exception as e:
+            logger.warning(f"[SpeedRate] Write sync report failed: {e}")
 
     def _prepare_data(self):
         """数据清洗与预处理"""
@@ -365,6 +431,18 @@ class SpeedRate:
             else:
                 current['end_time_source'] = self.raw_total_time
                 current['end_time'] = self.raw_total_time
+
+            if self.snap_to_frame:
+                current['start_time_source'] = self._snap_ms(current['start_time_source'])
+                current['end_time_source'] = max(
+                    current['start_time_source'] + self.MIN_CLIP_DURATION_MS,
+                    self._snap_ms(current['end_time_source'], minimum=current['start_time_source'] + self.MIN_CLIP_DURATION_MS)
+                )
+                current['start_time'] = self._snap_ms(current['start_time'])
+                current['end_time'] = max(
+                    current['start_time'] + self.MIN_CLIP_DURATION_MS,
+                    self._snap_ms(current['end_time'], minimum=current['start_time'] + self.MIN_CLIP_DURATION_MS)
+                )
 
             current['source_duration'] = current['end_time_source'] - current['start_time_source']
             
@@ -452,6 +530,8 @@ class SpeedRate:
 
             # 注册任务
             if self.should_audiorate and audio_target < dubb_dur:
+                if self.snap_to_frame:
+                    audio_target = max(self.MIN_CLIP_DURATION_MS, self._snap_ms(audio_target, minimum=self.MIN_CLIP_DURATION_MS))
                 self.audio_data.append({
                     "filename": it['filename'],
                     "dubb_time": dubb_dur,
@@ -459,6 +539,8 @@ class SpeedRate:
                 })
             
             if self.should_videorate:
+                if self.snap_to_frame:
+                    video_target = max(self.MIN_CLIP_DURATION_MS, self._snap_ms(video_target, minimum=self.MIN_CLIP_DURATION_MS))
                 pts = video_target / source_dur if source_dur > 0 else 1.0
                 self.video_for_clips.append({
                     "start": it['start_time_source'],
@@ -472,6 +554,15 @@ class SpeedRate:
                 it['final_duration'] = video_target
             # 记录决策日志
             logger.debug(f"[Calc] Mode={mode_log} Line={it['line']} | Source_duration={source_dur} Dubb_duration={dubb_dur} -> TargetV={video_target} TargetA={audio_target}")
+            self._report_row(
+                it,
+                source_duration=source_dur,
+                dubb_duration=dubb_dur,
+                audio_target=audio_target,
+                video_target=video_target,
+                mode=mode_log,
+                note="auto audio/video sync",
+            )
 
 
     def _execute_audio_speedup_rubberband(self):
@@ -662,6 +753,16 @@ class SpeedRate:
             if self.align_sub_audio:
                 it['start_time'] = total_audio_duration - dubb_len
                 it['end_time'] = total_audio_duration
+            slot_duration = max(0, int(it.get('end_time', 0) - it.get('start_time', 0)))
+            self._report_row(
+                it,
+                source_duration=slot_duration,
+                dubb_duration=dubb_len,
+                audio_target=dubb_len,
+                video_target=slot_duration,
+                mode="No speed change",
+                note="subtitle follows audio" if self.align_sub_audio else "manual/basic concat",
+            )
 
         if self.raw_total_time > total_audio_duration:
             audio_concat_list.append(self._create_silen_file("tail_end", self.raw_total_time - total_audio_duration))
@@ -706,6 +807,7 @@ class TtsSpeedRate(SpeedRate):
         if not self.should_audiorate:
             logger.debug("[SpeedRate] 未启用变速，进入普通拼接模式。")
             self._run_no_rate_change_mode()
+            self._write_sync_report()
             return self.queue_tts
         # 删除时间轴不合法的
         self.queue_tts=[it for it in self.queue_tts if it['end_time']-it['start_time']>0]
@@ -726,6 +828,7 @@ class TtsSpeedRate(SpeedRate):
 
         tools.set_process(text='Concatenating final audio...', uuid=self.uuid)
         self._concat_audio_aligned()
+        self._write_sync_report()
 
         return self.queue_tts
 
@@ -773,6 +876,15 @@ class TtsSpeedRate(SpeedRate):
                 })
 
             logger.debug(f"[Calc] Mode={mode_log} Line={it['line']} | Source_duration={source_dur} Dubb_duration={dubb_dur} -> TargetA={audio_target}")
+            self._report_row(
+                it,
+                source_duration=source_dur,
+                dubb_duration=dubb_dur,
+                audio_target=source_dur if dubb_dur > source_dur else dubb_dur,
+                video_target=source_dur,
+                mode=mode_log,
+                note="srt dubbing audio sync",
+            )
 
 
     def _concat_audio_aligned(self):

@@ -225,6 +225,19 @@ def _create_alignment_row(ui, parent):
     ui.video_autorate = QtWidgets.QCheckBox(parent)
     ui.video_autorate.setObjectName("videoe_autorate")
 
+    ui.sync_strategy = QtWidgets.QComboBox(parent)
+    ui.sync_strategy.setObjectName("sync_strategy")
+    ui.sync_strategy.setMinimumWidth(190)
+    ui.sync_strategy.addItem("Tự động cân bằng", "auto")
+    ui.sync_strategy.addItem("Chỉ ép audio", "audio")
+    ui.sync_strategy.addItem("Kéo video", "video")
+    ui.sync_strategy.addItem("Subtitle theo audio", "subtitle")
+    ui.sync_strategy.addItem("Tùy chỉnh checkbox", "custom")
+
+    ui.sync_snap_frame = QtWidgets.QCheckBox(parent)
+    ui.sync_snap_frame.setObjectName("sync_snap_frame")
+    ui.sync_snap_frame.setChecked(True)
+
     ui.remove_silent_mid = QtWidgets.QCheckBox()
     ui.remove_silent_mid.setObjectName("remove_silent_mid")
     ui.remove_silent_mid.setVisible(False)
@@ -244,6 +257,8 @@ def _create_alignment_row(ui, parent):
     layout.addWidget(ui.align_btn)
     layout.addWidget(ui.voice_autorate)
     layout.addWidget(ui.video_autorate)
+    layout.addWidget(ui.sync_strategy)
+    layout.addWidget(ui.sync_snap_frame)
     layout.addWidget(ui.remove_silent_mid)
     layout.addWidget(ui.align_sub_audio)
     layout.addWidget(ui.subtitle_type)

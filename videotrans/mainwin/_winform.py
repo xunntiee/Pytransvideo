@@ -24,6 +24,20 @@ class WinformMixin:
             dialog.exec()
             return
 
+        if name in ('download_url', 'download_channel', 'download_search'):
+            from videotrans.component.video_downloader import VideoDownloadWindow
+
+            key = 'video_downloader'
+            winobj = app_cfg.child_forms.get(key)
+            if not winobj:
+                winobj = VideoDownloadWindow()
+                app_cfg.child_forms[key] = winobj
+            mode = 'search' if name == 'download_search' else ('channel' if name == 'download_channel' else 'url')
+            winobj.set_mode(mode)
+            winobj.show()
+            winobj.activateWindow()
+            return
+
         winobj = app_cfg.child_forms.get(name)
         if winobj:
             if hasattr(winobj, 'update_ui'):
@@ -34,8 +48,8 @@ class WinformMixin:
             return
 
         if name == 'clipvideo':
-            from videotrans.component.clip_video import ClipVideoWindow
-            window = ClipVideoWindow()
+            from videotrans.component.video_editor import VideoEditorWindow
+            window = VideoEditorWindow()
             app_cfg.child_forms[name] = window
             window.show()
             return

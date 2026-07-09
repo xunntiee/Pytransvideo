@@ -55,6 +55,33 @@ class WinActionBaseMiscMixin:
             self.main.remove_silent_mid.setVisible(True)
             self.main.align_sub_audio.setVisible(True)
 
+    def sync_strategy_change(self, _index=0):
+        strategy = self.main.sync_strategy.currentData() or "auto"
+        custom = strategy == "custom"
+        self.main.voice_autorate.setEnabled(custom)
+        self.main.video_autorate.setEnabled(custom)
+
+        if strategy in {"auto", "balanced"}:
+            self.main.voice_autorate.setChecked(True)
+            self.main.video_autorate.setChecked(True)
+        elif strategy == "audio":
+            self.main.voice_autorate.setChecked(True)
+            self.main.video_autorate.setChecked(False)
+        elif strategy == "video":
+            self.main.voice_autorate.setChecked(False)
+            self.main.video_autorate.setChecked(True)
+        elif strategy == "subtitle":
+            self.main.voice_autorate.setChecked(False)
+            self.main.video_autorate.setChecked(False)
+            self.main.align_sub_audio.setChecked(True)
+
+        if self.main.voice_autorate.isChecked() or self.main.video_autorate.isChecked():
+            self.main.remove_silent_mid.setVisible(False)
+            self.main.align_sub_audio.setVisible(False)
+        else:
+            self.main.remove_silent_mid.setVisible(True)
+            self.main.align_sub_audio.setVisible(True)
+
     def check_txt(self, txt=''):
         if txt and not re.search(r'\d{1,2}:\d{1,2}:\d{1,2}(.\d+)?\s*?-->\s*?\d{1,2}:\d{1,2}:\d{1,2}(.\d+)?', txt):
             show_error(

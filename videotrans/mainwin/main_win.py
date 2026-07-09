@@ -132,6 +132,12 @@ class MainWindow(BindSignalsMixin, WinformMixin, LifecycleMixin, QMainWindow, Ui
         self.pitch_rate.setValue(int(params.get('pitch', '0').replace('Hz', '')))
         self.voice_autorate.setChecked(bool(params.get('voice_autorate', False)))
         self.video_autorate.setChecked(bool(params.get('video_autorate', False)))
+        _sync_strategy = params.get('tts_sync_strategy', 'auto')
+        for index in range(self.sync_strategy.count()):
+            if self.sync_strategy.itemData(index) == _sync_strategy:
+                self.sync_strategy.setCurrentIndex(index)
+                break
+        self.sync_snap_frame.setChecked(bool(params.get('tts_sync_snap_frame', True)))
         self.fix_punc.setCurrentIndex(int(params.get('fix_punc', 0)))
         self.recogn2pass.setChecked(bool(params.get('recogn2pass', False)))
         self.only_out_mp4.setChecked(bool(params.get('only_out_mp4', False)))

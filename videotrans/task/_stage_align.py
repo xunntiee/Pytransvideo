@@ -37,9 +37,12 @@ class AlignMixin:
             target_audio=self.cfg.target_wav,
             cache_folder=self.cfg.cache_folder,
             align_sub_audio=self.cfg.align_sub_audio,
-            remove_silent_mid=self.cfg.remove_silent_mid
+            remove_silent_mid=self.cfg.remove_silent_mid,
+            sync_strategy=self.cfg.tts_sync_strategy,
+            snap_to_frame=self.cfg.tts_sync_snap_frame
         )
         self.queue_tts = rate_inst.run()
+        self._copy_tts_sync_report(rate_inst)
 
         if vail_file(self.cfg.novoice_mp4):
             self.video_time = get_video_duration(self.cfg.novoice_mp4)
@@ -71,3 +74,14 @@ class AlignMixin:
 
         self.signal(text=tr('Alignment phase complete, awaiting the next step'))
         logger.debug(f'[声画字幕对齐阶段结束耗时]:{time.time()-_st}s')
+
+    def _copy_tts_sync_report(self, rate_inst):
+        try:
+            target_dir = Path(self.cfg.target_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            stem = getattr(self.cfg, "noextname", "") or "video"
+            for report in (getattr(rate_inst, "sync_report_json", ""), getattr(rate_inst, "sync_report_csv", "")):
+                if report and Path(report).exists():
+                    shutil.copy2(report, target_dir / f"{stem}_tts_sync_report{Path(report).suffix}")
+        except Exception as e:
+            logger.warning(f"Copy TTS sync report failed: {e}")
