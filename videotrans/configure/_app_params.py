@@ -65,6 +65,8 @@ class AppParams:
         _settings = _settings_ref
         return {
             "last_opendir": f"{ROOT_DIR}/input",
+            "batch_srt_default_dir": f"{ROOT_DIR}/input",
+            "batch_video_default_dir": f"{ROOT_DIR}/input",
             "output_dir": f"{ROOT_DIR}/output",
             "is_cuda": False,
             "line_roles": {},

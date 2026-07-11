@@ -209,6 +209,7 @@ def _setup_actions_and_menus(ui, MainWindow):
     ui.toolBar.addAction(ui.action_download_url)
     ui.toolBar.addAction(ui.action_download_channel)
     ui.toolBar.addAction(ui.action_download_search)
+    ui.toolBar.addAction(ui.action_clipvideo)
     ui.toolBar.addAction(ui.action_tiquzimu)
     ui.toolBar.addAction(ui.action_yuyinshibie)
     ui.toolBar.addAction(ui.action_fanyi)

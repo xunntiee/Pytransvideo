@@ -48,8 +48,8 @@ class WinformMixin:
             return
 
         if name == 'clipvideo':
-            from videotrans.component.video_editor import VideoEditorWindow
-            window = VideoEditorWindow()
+            from videotrans.component.video_batch_workflow import VideoBatchWorkflowWindow
+            window = VideoBatchWorkflowWindow()
             app_cfg.child_forms[name] = window
             window.show()
             return

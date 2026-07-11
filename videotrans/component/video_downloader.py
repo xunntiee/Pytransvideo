@@ -138,6 +138,17 @@ def _safe_filename(value, fallback="video", max_length=160):
     return value[:max_length].strip(" .") or fallback
 
 
+def _safe_output_stem(value, fallback="video"):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    name = Path(value.replace("\\", "/")).name
+    suffix = Path(name).suffix.lower()
+    if suffix in {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".mp3", ".m4a", ".wav"}:
+        name = Path(name).stem
+    return _safe_filename(name, fallback=fallback, max_length=120)
+
+
 def _extension_from_response(response, url, default=".mp4"):
     content_type = (response.headers.get("content-type") or "").split(";", 1)[0].lower()
     if content_type == "video/mp4":
@@ -830,6 +841,7 @@ def _build_ydl_options(
     use_archive,
     playlist_mode,
     playlist_limit,
+    custom_filename="",
     progress_hook=None,
     emit=None,
 ):
@@ -837,7 +849,10 @@ def _build_ydl_options(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    if playlist_mode:
+    custom_stem = _safe_output_stem(custom_filename)
+    if custom_stem and not playlist_mode:
+        outtmpl = output_path / f"{custom_stem}.%(ext)s"
+    elif playlist_mode:
         outtmpl = output_path / "%(playlist_title).100B" / "%(playlist_index)05d - %(title).200B [%(id)s].%(ext)s"
     else:
         outtmpl = output_path / "%(title).200B [%(id)s].%(ext)s"
@@ -1056,6 +1071,7 @@ class VideoDownloadWorker(QThread):
         use_archive=True,
         playlist_mode=False,
         playlist_limit=0,
+        custom_filename="",
         parent=None,
     ):
         super().__init__(parent)
@@ -1069,6 +1085,7 @@ class VideoDownloadWorker(QThread):
         self.use_archive = use_archive
         self.playlist_mode = playlist_mode
         self.playlist_limit = playlist_limit
+        self.custom_filename = custom_filename or ""
         self._cancel = False
 
     def stop(self):
@@ -1147,7 +1164,11 @@ class VideoDownloadWorker(QThread):
         with requests.get(download_url, headers=headers, stream=True, timeout=60) as response:
             response.raise_for_status()
             extension = _extension_from_response(response, download_url)
-            target = output_path / f"{_safe_filename(title, video_id)} [{video_id}]{extension}"
+            custom_stem = _safe_output_stem(self.custom_filename)
+            if custom_stem and len(self.items) == 1:
+                target = output_path / f"{custom_stem}{extension}"
+            else:
+                target = output_path / f"{_safe_filename(title, video_id)} [{video_id}]{extension}"
 
             if target.exists():
                 self.event.emit(
@@ -1267,6 +1288,7 @@ class VideoDownloadWorker(QThread):
                 use_archive=self.use_archive,
                 playlist_mode=self.playlist_mode,
                 playlist_limit=self.playlist_limit,
+                custom_filename=self.custom_filename if len(self.items) == 1 and not direct_items else "",
                 progress_hook=self._progress_hook,
                 emit=self.event.emit,
             )
@@ -1573,12 +1595,20 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         archive_check = QtWidgets.QCheckBox("Bỏ qua video đã tải")
         archive_check.setChecked(True)
 
+        custom_filename = None
+        if prefix == "url":
+            custom_filename = QtWidgets.QLineEdit()
+            custom_filename.setPlaceholderText("Tùy chọn, chỉ áp dụng khi tải 1 video. Ví dụ: video_01")
+            custom_filename.setToolTip("Nếu tải nhiều URL cùng lúc, app sẽ bỏ qua tên này để tránh ghi đè file.")
+
         setattr(self, f"{prefix}_format_combo", format_combo)
         setattr(self, f"{prefix}_threads_spin", threads_spin)
         setattr(self, f"{prefix}_output_dir", output_dir)
         setattr(self, f"{prefix}_cookie_combo", cookie_combo)
         setattr(self, f"{prefix}_cookie_file", cookie_file)
         setattr(self, f"{prefix}_archive_check", archive_check)
+        if custom_filename is not None:
+            setattr(self, f"{prefix}_custom_filename", custom_filename)
 
         browse_btn.clicked.connect(lambda: self._choose_output_dir(output_dir))
         open_btn.clicked.connect(lambda: self._open_output_dir(output_dir.text()))
@@ -1598,6 +1628,9 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         layout.addWidget(QtWidgets.QLabel("File cookie"), 3, 0)
         layout.addWidget(cookie_file, 3, 1, 1, 3)
         layout.addWidget(cookie_file_btn, 3, 4)
+        if custom_filename is not None:
+            layout.addWidget(QtWidgets.QLabel("Tên file"), 4, 0)
+            layout.addWidget(custom_filename, 4, 1, 1, 3)
         return layout
 
     def _common_values(self, prefix):
@@ -1609,6 +1642,11 @@ class VideoDownloadWindow(QtWidgets.QWidget):
             "cookie_browser": COOKIE_BROWSERS.get(cookie_label, ""),
             "cookie_file": getattr(self, f"{prefix}_cookie_file").text().strip(),
             "use_archive": getattr(self, f"{prefix}_archive_check").isChecked(),
+            "custom_filename": (
+                getattr(self, f"{prefix}_custom_filename").text().strip()
+                if hasattr(self, f"{prefix}_custom_filename")
+                else ""
+            ),
         }
 
     def _restore_saved_options(self):
@@ -1620,6 +1658,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         cookie_browser = settings.get("video_downloader_cookie_browser", "")
         channel_url = settings.get("video_downloader_channel_url", "")
         search_keyword = settings.get("video_downloader_search_keyword", "")
+        custom_filename = settings.get("video_downloader_custom_filename", "")
 
         for prefix in ("url", "channel", "search"):
             if output_dir:
@@ -1633,6 +1672,8 @@ class VideoDownloadWindow(QtWidgets.QWidget):
             self.channel_input.setPlainText(channel_url)
         if search_keyword:
             self.search_keyword.setText(search_keyword)
+        if custom_filename and hasattr(self, "url_custom_filename"):
+            self.url_custom_filename.setText(custom_filename)
 
     def _set_combo_value(self, combo, value):
         for index in range(combo.count()):
@@ -1645,6 +1686,8 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         settings["video_downloader_output_dir"] = values["output_dir"]
         settings["video_downloader_cookie_file"] = values["cookie_file"]
         settings["video_downloader_cookie_browser"] = values["cookie_browser"]
+        if prefix == "url":
+            settings["video_downloader_custom_filename"] = values.get("custom_filename", "")
         if hasattr(self, "channel_input"):
             settings["video_downloader_channel_url"] = self._first_channel_url()
         if hasattr(self, "search_keyword"):
@@ -1748,6 +1791,8 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.url_stop_btn.setDisabled(not busy)
         self.channel_stop_btn.setDisabled(not busy)
         self.search_stop_btn.setDisabled(not busy)
+        if hasattr(self, "url_custom_filename"):
+            self.url_custom_filename.setDisabled(busy)
 
     def _start_url_download(self):
         if self._has_running_task():
@@ -1826,6 +1871,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
             use_archive=values["use_archive"],
             playlist_mode=playlist_mode,
             playlist_limit=playlist_limit,
+            custom_filename=values.get("custom_filename", "") if len(urls) == 1 and not playlist_mode else "",
             parent=self,
         )
         self.worker.event.connect(self._on_download_event)
