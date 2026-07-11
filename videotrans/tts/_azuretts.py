@@ -26,13 +26,19 @@ class AzureTTS(BaseTTS):
             audio_config = speechsdk.audio.AudioOutputConfig(use_default_speaker=True, filename=filename)
             speech_synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
             text_xml = f"<prosody rate='{self.rate}' pitch='{self.pitch}' volume='{self.volume}'>{data_item['text']}</prosody>"
+            voice = tools.get_azure_rolelist(self.language.split('-')[0], data_item['role'])
+            if not voice or voice == "No":
+                raise StopTask(
+                    f"Azure-TTS voice '{data_item['role']}' is not available for language '{self.language}'. "
+                    "Please choose a matching Azure voice or set Select Voice to No."
+                )
             ssml = """<speak version='1.0' xml:lang='{}' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts'>
                                     <voice name='{}'>
                                         <prosody rate="{}" pitch='{}'  volume='{}'>
                                         {}
                                         </prosody>
                                     </voice>
-                                    </speak>""".format(self.language, tools.get_azure_rolelist(self.language.split('-')[0],data_item['role']), self.rate, self.pitch,
+                                    </speak>""".format(self.language, voice, self.rate, self.pitch,
                                                        self.volume,
                                                        text_xml)
             logger.debug(f'{ssml=}')

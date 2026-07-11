@@ -147,6 +147,8 @@ class TaskCfgTTS(TaskCfgBase):
     video_autorate: bool = False  # 是否视频自动慢速
     remove_silent_mid: bool = False  # 是否移除字幕间的空隙
     align_sub_audio: bool = True  # 是否强制对齐字幕和声音
+    tts_sync_strategy: str = "auto"  # auto/audio/video/balanced/subtitle/custom
+    tts_sync_snap_frame: bool = True  # snap subtitle/video timing to frame boundaries when video exists
 
 
 # 字幕翻译
@@ -172,6 +174,7 @@ class TaskCfgVTT(TaskCfgSTT, TaskCfgTTS, TaskCfgSTS):
     clear_cache: bool = False  # 是否清理已存在的文件
     background_music: Union[os.PathLike,str]=None  # 手动添加的背景音频，整理后的完整路径
     subtitle_type: int = 0  # 软硬字幕嵌入类型 0=不嵌入，1=硬字幕，2=软字幕，3=双硬，4=双软
+    blur_old_subs: bool = False  # Blur the bottom area before burning new hard subtitles.
     only_out_mp4: bool = False  # 是否仅仅输出mp4,仅视频翻译使用
     recogn2pass: bool = False  # 对配音音频再次识别
     output_srt: int = 0  # 转录并翻译 模式输出字幕类似，0=单字幕，1=目标语言在线双字幕，2=目标语言在上双字幕

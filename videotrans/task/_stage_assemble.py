@@ -1,6 +1,7 @@
 import glob
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from videotrans.configure.config import tr, app_cfg, settings, logger
 from videotrans.configure.excepts import VideoTransError, FFmpegError
 from videotrans.util.help_ffmpeg import get_video_codec, get_audio_time, runffmpeg, get_video_duration
 from videotrans.util.help_misc import vail_file, read_last_n_lines, is_novoice_mp4
+from videotrans.util.help_srt import get_subtitle_from_srt
 
 
 class AssembleMixin:
@@ -246,7 +248,7 @@ class AssembleMixin:
 
             else:
                 cmd1.append('-filter_complex')
-                subtitle_filter = [f"[0:v]subtitles=filename='{subtitles_file}'[v_out]"]
+                subtitle_filter = [self._hard_subtitle_filter(subtitles_file)]
                 cmd2 = [
                     "-map",
                     "[v_out]",
@@ -294,6 +296,102 @@ class AssembleMixin:
             if app_cfg.exit_soft:return
             time.sleep(1)
         return
+
+    def _hard_subtitle_filter(self, subtitles_file: str) -> str:
+        subtitle_filter = f"subtitles=filename='{subtitles_file}'"
+        if not getattr(self.cfg, 'blur_old_subs', False):
+            return f"[0:v]{subtitle_filter}[v_out]"
+
+        timed_blur = self._timed_subtitle_blur_filter()
+        if not timed_blur:
+            return f"[0:v]{subtitle_filter}[v_out]"
+        return f"[0:v]{timed_blur},{subtitle_filter}[v_out]"
+
+    def _timed_subtitle_blur_filter(self) -> str:
+        width = int(self.video_info.get('width') or 0)
+        height = int(self.video_info.get('height') or 0)
+        if width <= 0 or height <= 0:
+            return ""
+
+        subtitle_items = []
+        if self.cfg.source_sub and Path(self.cfg.source_sub).exists():
+            subtitle_items = get_subtitle_from_srt(self.cfg.source_sub)
+        if not subtitle_items and self.cfg.target_sub and Path(self.cfg.target_sub).exists():
+            subtitle_items = get_subtitle_from_srt(self.cfg.target_sub)
+        if not subtitle_items:
+            return ""
+
+        filters = []
+        max_items = 360
+        for index, item in enumerate(subtitle_items[:max_items]):
+            start = max(0, int(item.get('start_time', 0)) / 1000)
+            end = max(start + 0.05, int(item.get('end_time', 0)) / 1000)
+            text = item.get('text', '')
+            box = self._estimate_subtitle_box(text, width, height)
+            if not box:
+                continue
+            x, y, box_w, box_h = box
+            filters.append(
+                "delogo="
+                f"x={x}:y={y}:w={box_w}:h={box_h}:show=0:"
+                f"enable='between(t,{start:.3f},{end:.3f})'"
+            )
+        return ",".join(filters)
+
+    def _estimate_subtitle_box(self, text: str, width: int, height: int):
+        lines = self._subtitle_text_lines(text)
+        if not lines:
+            return None
+
+        font_px = max(26, int(height * 0.045))
+        line_h = int(font_px * 1.24)
+        pad_x = max(18, int(font_px * 0.55))
+        pad_y = max(10, int(font_px * 0.32))
+        max_line_w = max(self._estimate_text_line_width(line, font_px) for line in lines)
+        box_w = int(max_line_w + pad_x * 2)
+        box_h = int(len(lines) * line_h + pad_y * 2)
+
+        min_w = max(120, int(width * 0.18))
+        max_w = int(width * 0.86)
+        box_w = max(min_w, min(max_w, box_w))
+        box_h = max(int(font_px * 1.5), min(int(height * 0.20), box_h))
+
+        # Douyin/TikTok burned captions usually sit above the native bottom margin.
+        # Keep the replacement blur in that caption lane instead of blurring the bottom band.
+        margin_bottom = max(90, int(height * 0.175))
+        x = int((width - box_w) / 2)
+        y = int(height - margin_bottom - box_h)
+        x = max(2, min(width - box_w - 2, x))
+        y = max(2, min(height - box_h - 2, y))
+        return x, y, box_w, box_h
+
+    @staticmethod
+    def _subtitle_text_lines(text: str):
+        clean = re.sub(r"\{[^}]*\}", "", str(text or ""))
+        clean = re.sub(r"</?[^>]+>", "", clean)
+        clean = clean.replace("\\N", "\n").replace("\\n", "\n")
+        return [line.strip() for line in clean.splitlines() if line.strip()]
+
+    def _estimate_subtitle_text_width(self, text: str, height: int) -> float:
+        font_px = max(26, int(height * 0.045))
+        lines = self._subtitle_text_lines(text)
+        return max((self._estimate_text_line_width(line, font_px) for line in lines), default=0)
+
+    @staticmethod
+    def _estimate_text_line_width(line: str, font_px: int) -> float:
+        width = 0.0
+        for ch in line:
+            if ch.isspace():
+                width += font_px * 0.34
+            elif re.match(r"[\u2e80-\u9fff\uff00-\uffef]", ch):
+                width += font_px * 0.96
+            elif ch.isdigit():
+                width += font_px * 0.58
+            elif ch in ".,:;!|/\\'\"`":
+                width += font_px * 0.30
+            else:
+                width += font_px * 0.56
+        return width
 
     def _get_origin_audio(self, output,duration_ms=0):
         if self.video_info.get('streams_audio', 0) == 0:
@@ -363,6 +461,9 @@ class AssembleMixin:
         if _preset not in ['fast', 'slow', 'medium']:
             _preset = 'medium'
         enc_args = ['-crf', _crf, '-preset', _preset]
+
+        if getattr(self.cfg, 'blur_old_subs', False):
+            return global_args, self._hard_subtitle_filter(subtitles_file), vcodec, enc_args
 
         PRESET_MAP = {
             'nvenc': {'fast': 'p2', 'medium': 'p4', 'slow': 'p7'},

@@ -334,6 +334,9 @@ class Ui_MainWindow(object):
         self.voice_autorate.setToolTip(tr("shuoming03"))
         self.video_autorate.setText(tr("Slow video"))
         self.video_autorate.setToolTip(tr("Video Auto Slow"))
+        self.sync_strategy.setToolTip("Tự động chọn cách khớp TTS: ép audio, kéo video hoặc cho subtitle chạy theo audio.")
+        self.sync_snap_frame.setText("Snap frame")
+        self.sync_snap_frame.setToolTip("Làm tròn thời gian subtitle/video theo frame để giảm lệch hình-tiếng.")
 
         self.remove_silent_mid.setText(tr("Del inline mute?"))
         self.remove_silent_mid.setToolTip(
@@ -426,6 +429,12 @@ class Ui_MainWindow(object):
         self.action_biaozhun.setText(tr("Standard Function Mode"))
         self.action_biaozhun.setToolTip(
             tr("Batch audio or video translation with all configuration options customizable on demand"))
+        self.action_download_url.setText("Tải video URL")
+        self.action_download_url.setToolTip("Tải video từ một hoặc nhiều URL.")
+        self.action_download_channel.setText("Tải video kênh")
+        self.action_download_channel.setToolTip("Dán URL kênh/profile/playlist để tải toàn bộ video của kênh.")
+        self.action_download_search.setText("Tìm Douyin viral")
+        self.action_download_search.setToolTip("Crawl video Douyin theo từ khóa, xếp hạng theo tương tác rồi tải nhanh từ CDN.")
         self.action_yuyinshibie.setText(tr("Speech Recognition Text"))
         self.action_yuyinshibie.setToolTip(
             tr("Batch recognize speech in audio or video as srt subtitles"))
@@ -443,8 +452,8 @@ class Ui_MainWindow(object):
 
         self.action_yingyinhebing.setText(tr("Video Subtitles Merging"))
         self.action_yingyinhebing.setToolTip(tr("Merge audio, video, and subtitles into one file"))
-        self.action_clipvideo.setText(tr("Edit video on subtitles"))
-        self.action_clipvideo.setToolTip(tr("Edit video on subtitles"))
+        self.action_clipvideo.setText("Chỉnh sửa video")
+        self.action_clipvideo.setToolTip("Che sub, làm mờ sub/logo, delogo và cắt/resize video bằng FFmpeg.")
         self.action_realtime_stt.setText(tr("Real-time speech-to-text"))
         self.action_textmatching.setText(tr("Text matching and timing"))
         self.action_textmatching.setToolTip(tr("Text matching and timing"))

@@ -55,6 +55,33 @@ class WinActionBaseMiscMixin:
             self.main.remove_silent_mid.setVisible(True)
             self.main.align_sub_audio.setVisible(True)
 
+    def sync_strategy_change(self, _index=0):
+        strategy = self.main.sync_strategy.currentData() or "auto"
+        custom = strategy == "custom"
+        self.main.voice_autorate.setEnabled(custom)
+        self.main.video_autorate.setEnabled(custom)
+
+        if strategy in {"auto", "balanced"}:
+            self.main.voice_autorate.setChecked(True)
+            self.main.video_autorate.setChecked(True)
+        elif strategy == "audio":
+            self.main.voice_autorate.setChecked(True)
+            self.main.video_autorate.setChecked(False)
+        elif strategy == "video":
+            self.main.voice_autorate.setChecked(False)
+            self.main.video_autorate.setChecked(True)
+        elif strategy == "subtitle":
+            self.main.voice_autorate.setChecked(False)
+            self.main.video_autorate.setChecked(False)
+            self.main.align_sub_audio.setChecked(True)
+
+        if self.main.voice_autorate.isChecked() or self.main.video_autorate.isChecked():
+            self.main.remove_silent_mid.setVisible(False)
+            self.main.align_sub_audio.setVisible(False)
+        else:
+            self.main.remove_silent_mid.setVisible(True)
+            self.main.align_sub_audio.setVisible(True)
+
     def check_txt(self, txt=''):
         if txt and not re.search(r'\d{1,2}:\d{1,2}:\d{1,2}(.\d+)?\s*?-->\s*?\d{1,2}:\d{1,2}:\d{1,2}(.\d+)?', txt):
             show_error(
@@ -75,8 +102,9 @@ class WinActionBaseMiscMixin:
         return True
 
     def listen_voice_fun(self):
-        from videotrans import translator
+        from videotrans import translator, tts
         from videotrans.util.ListenVoice import ListenVoice
+        from videotrans.util import tools
         lang = translator.get_code(show_text=self.main.target_language.currentText())
         if not lang:
             return show_error(
@@ -88,6 +116,16 @@ class WinActionBaseMiscMixin:
         role = self.main.voice_role.currentText()
         if not role or role == 'No':
             return show_error(tr('mustberole'))
+        if self.main.tts_type.currentIndex() == tts.EDGE_TTS and not tools.get_edge_rolelist(role, lang):
+            return show_error(
+                f"Voice '{role}' is not available for language '{self.main.target_language.currentText()}'. "
+                "Please choose another voice or set Select Voice to No."
+            )
+        if self.main.tts_type.currentIndex() == tts.AZURE_TTS and not tools.get_azure_rolelist(lang.split('-')[0], role):
+            return show_error(
+                f"Voice '{role}' is not available for Azure-TTS language '{self.main.target_language.currentText()}'. "
+                "Please choose another Azure voice or set Select Voice to No."
+            )
 
         voice_dir = tempfile.gettempdir() + '/pyvideotrans'
         if not Path(voice_dir).exists():

@@ -148,6 +148,7 @@ class WinActionCheckMixin:
         self.cfg['remove_noise'] = self.main.remove_noise.isChecked()
 
         self.cfg['subtitle_type'] = self.main.subtitle_type.currentIndex()
+        self.cfg['blur_old_subs'] = self.main.blur_old_subs.isChecked()
 
         self.cfg['voice_rate'] = self.main.voice_rate.value()
         try:
@@ -155,8 +156,23 @@ class WinActionCheckMixin:
         except (TypeError, ValueError):
             voice_rate = 0
         self.cfg['voice_rate'] = f"+{voice_rate}%" if voice_rate >= 0 else f"{voice_rate}%"
-        self.cfg['voice_autorate'] = self.main.voice_autorate.isChecked()
-        self.cfg['video_autorate'] = self.main.video_autorate.isChecked()
+        self.cfg['tts_sync_strategy'] = self.main.sync_strategy.currentData() or "auto"
+        self.cfg['tts_sync_snap_frame'] = self.main.sync_snap_frame.isChecked()
+        if self.cfg['tts_sync_strategy'] in {"auto", "balanced"}:
+            self.cfg['voice_autorate'] = True
+            self.cfg['video_autorate'] = True
+        elif self.cfg['tts_sync_strategy'] == "audio":
+            self.cfg['voice_autorate'] = True
+            self.cfg['video_autorate'] = False
+        elif self.cfg['tts_sync_strategy'] == "video":
+            self.cfg['voice_autorate'] = False
+            self.cfg['video_autorate'] = True
+        elif self.cfg['tts_sync_strategy'] == "subtitle":
+            self.cfg['voice_autorate'] = False
+            self.cfg['video_autorate'] = False
+        else:
+            self.cfg['voice_autorate'] = self.main.voice_autorate.isChecked()
+            self.cfg['video_autorate'] = self.main.video_autorate.isChecked()
 
         self.cfg['is_separate'] = self.main.is_separate.isChecked()
         self.cfg['embed_bgm'] = self.main.embed_bgm.isChecked()
@@ -189,8 +205,12 @@ class WinActionCheckMixin:
         self.cfg['remove_silent_mid'] = False
         self.cfg['align_sub_audio'] = True
         if not self.cfg['voice_autorate'] and not self.cfg['video_autorate']:
-            self.cfg['remove_silent_mid'] = self.main.remove_silent_mid.isChecked()
-            self.cfg['align_sub_audio'] = self.main.align_sub_audio.isChecked()
+            if self.cfg['tts_sync_strategy'] == "subtitle":
+                self.cfg['remove_silent_mid'] = False
+                self.cfg['align_sub_audio'] = True
+            else:
+                self.cfg['remove_silent_mid'] = self.main.remove_silent_mid.isChecked()
+                self.cfg['align_sub_audio'] = self.main.align_sub_audio.isChecked()
         if self.cuda_isok() is not True:
             self.main.startbtn.setDisabled(False)
             return

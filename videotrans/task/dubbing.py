@@ -251,9 +251,12 @@ class DubbingSrt(BaseTask):
             cache_folder=self.cfg.cache_folder,
             remove_silent_mid=self.cfg.remove_silent_mid if not self.cfg.target_sub.endswith('.txt') else True,
             # 是否移除字幕间空隙 仅在未自动加速时才起作用,txt配音时移除，即直接音频文件相连
-            align_sub_audio=False  # 不对齐字幕 仅在未自动加速时才起作用
+            align_sub_audio=False,
+            sync_strategy=self.cfg.tts_sync_strategy,
+            snap_to_frame=False
         )
         self.queue_tts = rate_inst.run()
+        self._copy_tts_sync_report(rate_inst)
         volume = self.cfg.volume.strip()
         if volume != '+0%':
             try:
@@ -262,6 +265,17 @@ class DubbingSrt(BaseTask):
                 runffmpeg(['-y', '-i', self.cfg.target_wav, '-af', f"volume={volume}", tmp_name])
             except Exception as e:
                 logger.exception(f'配音完毕后调节音量失败 {e}', exc_info=True)
+
+    def _copy_tts_sync_report(self, rate_inst):
+        try:
+            target_dir = Path(self.cfg.target_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            stem = getattr(self.cfg, "noextname", "") or "tts"
+            for report in (getattr(rate_inst, "sync_report_json", ""), getattr(rate_inst, "sync_report_csv", "")):
+                if report and Path(report).exists():
+                    shutil.copy2(report, target_dir / f"{stem}_tts_sync_report{Path(report).suffix}")
+        except Exception as e:
+            logger.warning(f"Copy TTS sync report failed: {e}")
 
     def task_done(self):
         if self._exit(): return

@@ -137,7 +137,14 @@ class EdgeTTS(BaseTTS):
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
         all_voices=set()
         for it in self.queue_tts:
-            it['role']=tools.get_edge_rolelist(it['role'],self.language)
+            display_role = it.get('role')
+            mapped_role = tools.get_edge_rolelist(display_role, self.language)
+            if not mapped_role or mapped_role == 'No':
+                raise DubbingSrtError(
+                    f"Edge-TTS voice '{display_role}' is not available for language '{self.language}'. "
+                    "Please choose a matching voice or set Select Voice to No."
+                )
+            it['role'] = mapped_role
             all_voices.add(it['role'])
 
         worker_tasks = [

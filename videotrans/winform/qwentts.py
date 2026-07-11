@@ -30,9 +30,13 @@ def openwin():
         winobj.test_qwentts.setText(tr("Testing..."))
         from videotrans import tts
         import time
+        roles = [role.strip() for role in settings.get('qwentts_role', '').split(',') if role.strip()]
+        if not roles:
+            roles = [name for name in tools.get_qwen3tts_rolelist().keys() if name != "No"]
+        role = roles[0] if roles else "Cherry"
         wk = ListenVoice(parent=winobj, queue_tts=[{
             "text": '\u4f60\u597d\u554a\u6211\u7684\u670b\u53cb',
-            "role": settings.get('qwentts_role','').split(',')[0],
+            "role": role,
             "filename": config.TEMP_DIR + f"/{time.time()}-qwen.wav",
             "tts_type": tts.QWEN_TTS}],
                          language="zh",

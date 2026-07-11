@@ -154,7 +154,8 @@ def get_edge_rolelist(role_name=None, locale=None):
         except (OSError, json.JSONDecodeError):
             pass
     if role_name and locale:
-        return voice_list.get(locale.split('-')[0], {}).get(role_name)
+        locale_roles = voice_list.get(locale.split('-')[0], {})
+        return locale_roles.get(role_name) or (role_name if role_name in locale_roles.values() else None)
     return voice_list
 
 @lru_cache
@@ -163,7 +164,13 @@ def get_azure_rolelist(language=None, role_name=None):
     voice_list = json.loads(Path(voice_file).read_text(encoding='utf-8-sig'))
     # 根据角色显示名字获取真实角色
     if language and role_name:
-        return voice_list.get(language, {}).get(role_name)
+        language_roles = voice_list.get(language, {})
+        normalized_role_name = re.sub(r"\((Female|Male)/[^)]*\)", r"(\1)", role_name)
+        return (
+            language_roles.get(role_name)
+            or language_roles.get(normalized_role_name)
+            or (role_name if role_name in language_roles.values() else None)
+        )
     if role_name and (not language or language == 'auto'):
         for it in voice_list.values():
             for name, ro in it.items():

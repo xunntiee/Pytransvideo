@@ -2,12 +2,79 @@ from pathlib import Path
 
 from videotrans import translator, recognition, tts
 from videotrans.configure import contants
-from videotrans.configure.config import tr, settings, app_cfg
+from videotrans.configure.config import tr, settings, app_cfg, params, ROOT_DIR
 from videotrans.util.help_misc import show_error
 from videotrans.util.help_role import role_menu
 
 
 class WinActionConfigMixin:
+    def apply_cn_vi_hardsub_preset(self, checked=False):
+        output_dir = (Path(ROOT_DIR) / "output").as_posix()
+        input_dir = (Path(ROOT_DIR) / "input").as_posix()
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        Path(input_dir).mkdir(parents=True, exist_ok=True)
+        translate_type = translator.GEMINI_INDEX
+
+        self.main.recogn_type.setCurrentIndex(recognition.FASTER_WHISPER)
+        self.recogn_type_change()
+        if self.main.model_name.findText("tiny") >= 0:
+            self.main.model_name.setCurrentText("tiny")
+
+        self.main.translate_type.setCurrentIndex(translate_type)
+        self.main.source_language.setCurrentText("Simplified Chinese")
+        self.main.target_language.setCurrentText("Vietnamese")
+        self.main.tts_type.setCurrentIndex(0)
+        self.tts_type_change(0)
+        if self.main.voice_role.findText("No") >= 0:
+            self.main.voice_role.setCurrentText("No")
+
+        self.main.subtitle_type.setCurrentIndex(1)
+        self.main.blur_old_subs.setChecked(True)
+        self.main.enable_cuda.setChecked(False)
+        self.main.clear_cache.setChecked(True)
+        self.main.only_out_mp4.setChecked(False)
+        self.main.voice_autorate.setChecked(True)
+        self.main.video_autorate.setChecked(False)
+        if hasattr(self.main, "sync_strategy"):
+            self.main.sync_strategy.setCurrentIndex(max(0, self.main.sync_strategy.findData("audio")))
+        if hasattr(self.main, "sync_snap_frame"):
+            self.main.sync_snap_frame.setChecked(True)
+        self.main.select_file_type.setChecked(False)
+        self.main.target_dir = output_dir
+        self.main.btn_save_dir.setToolTip(output_dir)
+        self.main.output_dir.setText(tr('Translation results saved to:') + output_dir)
+
+        params.getset_params({
+            "last_opendir": input_dir,
+            "output_dir": output_dir,
+            "is_cuda": False,
+            "clear_cache": True,
+            "source_language": "Simplified Chinese",
+            "target_language": "Vietnamese",
+            "source_language_code": "zh-cn",
+            "target_language_code": "vi",
+            "translate_type": translate_type,
+            "subtitle_type": 1,
+            "blur_old_subs": True,
+            "tts_type": 0,
+            "model_name": "tiny",
+            "recogn_type": recognition.FASTER_WHISPER,
+            "voice_autorate": True,
+            "video_autorate": False,
+            "tts_sync_strategy": "audio",
+            "tts_sync_snap_frame": True,
+            "align_sub_audio": True,
+            "voice_role": "No",
+            "only_out_mp4": False,
+            "remove_silent_mid": False,
+            "copysrt_rawvideo": False,
+            "select_file_type": False,
+        })
+        params.save()
+        settings['aisendsrt'] = True
+        settings.save()
+        self.main.aisendsrt.setChecked(True)
+        self.main.show_tips.setText("Preset applied: CN->VI hard-sub, Gemini, no dubbing")
 
     def show_xxl_select(self):
         import sys
