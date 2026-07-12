@@ -316,13 +316,21 @@ class BatchWorkflowWorker(QThread):
         srt = Path(item["srt"])
         item_dir = self.output_dir / _safe_name(video.stem)
         item_dir.mkdir(parents=True, exist_ok=True)
+        self.log.emit(f"[{offset}/{total}] Bắt đầu xử lý: {video.name}")
+        self.log.emit(f"[{offset}/{total}] Thư mục video: {item_dir}")
         source_srt = item_dir / f"{_safe_name(srt.stem)}.source.srt"
         source_srt.write_text(_read_text(srt), encoding="utf-8")
-        self.log.emit(f"[{offset}/{total}] {video.name}: đã copy SRT nguồn.")
+        item["source_srt"] = str(source_srt).replace("\\", "/")
+        item["status"] = "Đã copy SRT nguồn"
+        self.log.emit(f"[{offset}/{total}] {video.name}: đã copy SRT nguồn -> {source_srt.name}")
 
-        translated_srt = self._translate_item_if_needed(item, srt, offset, total)
+        translated_srt = self._translate_item_if_needed(item, srt, item_dir, offset, total)
         if translated_srt:
             item["translated_srt"] = str(translated_srt).replace("\\", "/")
+            item["status"] = "Đã dịch SRT"
+            self.log.emit(f"[{offset}/{total}] {video.name}: SRT dịch -> {translated_srt}")
+        else:
+            self.log.emit(f"[{offset}/{total}] {video.name}: không bật dịch Gemini, dùng SRT gốc để burn subtitle.")
 
         edit = item.get("edit") or {}
         info = tools.get_video_info(str(video))
@@ -334,9 +342,13 @@ class BatchWorkflowWorker(QThread):
         if edit.get("enabled", True):
             output_video = item_dir / f"{_safe_name(video.stem)}_edited.mp4"
             command = build_batch_edit_command(str(video), str(output_video), edit, (width, height))
+            item["status"] = "Đang che/blur video"
+            self.log.emit(f"[{offset}/{total}] {video.name}: bắt đầu che/blur vùng sub cũ...")
             self._run_ffmpeg(command)
             working_video = output_video
-            self.log.emit(f"[{offset}/{total}] {video.name}: edit xong -> {output_video.name}")
+            item["edited_video"] = str(output_video).replace("\\", "/")
+            item["status"] = "Đã edit video"
+            self.log.emit(f"[{offset}/{total}] {video.name}: edit xong -> {output_video}")
         else:
             self.log.emit(f"[{offset}/{total}] {video.name}: bỏ qua che/blur video.")
 
@@ -346,13 +358,25 @@ class BatchWorkflowWorker(QThread):
             if subtitle_source.exists():
                 ass_path = item_dir / f"{_safe_name(video.stem)}_styled.ass"
                 final_video = item_dir / f"{_safe_name(video.stem)}_subtitled.mp4"
+                item["status"] = "Đang tạo ASS subtitle"
                 _write_ass_from_srt(subtitle_source, ass_path, subtitle_style, (width, height))
+                item["ass_subtitle"] = str(ass_path).replace("\\", "/")
+                self.log.emit(f"[{offset}/{total}] {video.name}: đã tạo subtitle ASS -> {ass_path.name}")
+                item["status"] = "Đang burn subtitle"
+                self.log.emit(f"[{offset}/{total}] {video.name}: bắt đầu burn subtitle mới...")
                 self._run_ffmpeg(build_burn_subtitle_command(str(working_video), str(final_video), ass_path))
-                self.log.emit(f"[{offset}/{total}] {video.name}: đã burn subtitle -> {final_video.name}")
+                item["final_video"] = str(final_video).replace("\\", "/")
+                item["status"] = "Hoàn tất"
+                self.log.emit(f"[{offset}/{total}] {video.name}: đã burn subtitle -> {final_video}")
             else:
+                item["status"] = "Thiếu SRT để burn subtitle"
                 self.log.emit(f"[{offset}/{total}] {video.name}: không thấy SRT để burn subtitle: {subtitle_source}")
+        else:
+            item["final_video"] = str(working_video).replace("\\", "/")
+            item["status"] = "Hoàn tất"
+            self.log.emit(f"[{offset}/{total}] {video.name}: subtitle mới đang tắt, file cuối -> {working_video}")
 
-    def _translate_item_if_needed(self, item, srt, offset, total):
+    def _translate_item_if_needed(self, item, srt, item_dir, offset, total):
         if self.ai_config.get("translation_mode") != "chrome_gemini_gem":
             return None
         if self.isInterruptionRequested():
@@ -364,8 +388,9 @@ class BatchWorkflowWorker(QThread):
                 gem_url=self.ai_config.get("gem_url") or None,
                 log=self.log.emit,
             )
-        target = Path(srt).with_name(f"{_safe_name(Path(srt).stem)}_vi.srt")
-        self.log.emit(f"[{offset}/{total}] Dịch Gemini: {Path(srt).name} -> {target.name}")
+        target = Path(item_dir) / f"{_safe_name(Path(srt).stem)}_vi.srt"
+        item["status"] = "Đang dịch Gemini"
+        self.log.emit(f"[{offset}/{total}] Dịch Gemini: {Path(srt).name} -> {target}")
         result = self.gemini.translate_srt(srt, target, force=bool(self.ai_config.get("force_retranslate")))
         self.log.emit(f"[{offset}/{total}] Gemini xong: {Path(result).name}")
         return result
@@ -1146,8 +1171,8 @@ class AiVoicePage(QtWidgets.QWidget):
         self.gem_url = QtWidgets.QLineEdit(self.file_page.gem_url.text())
         self.gem_url.textChanged.connect(self.file_page.gem_url.setText)
         self.note = QtWidgets.QLabel(
-            "Chrome + Gemini Gem sẽ mở Chrome/Edge mặc định, upload từng file SRT, chờ Gem dịch, "
-            "tải kết quả về cùng thư mục với tên *_vi.srt rồi dùng file đó để render."
+            "Chrome + Gemini Gem dùng một Chrome profile cố định của tool. Bấm 'Mở Gemini Gem' để đăng nhập trước; "
+            "khi chạy batch tool mới mở Gem URL, upload từng SRT, tải kết quả *_vi.srt rồi dùng file đó để render."
         )
         self.note.setWordWrap(True)
         grid.addWidget(QtWidgets.QLabel("Dịch qua"), 0, 0)
@@ -1334,8 +1359,11 @@ class VideoBatchWorkflowWindow(QtWidgets.QWidget):
             from videotrans.component.gemini_browser_automation import GeminiBrowserAutomation
 
             self.gemini_launcher = GeminiBrowserAutomation(gem_url=url, log=self.run_page.append_log)
-            self.gemini_launcher.start()
-            self.run_page.append_log(f"Đã mở Gemini Gem bằng Chrome/Edge mặc định: {url}")
+            self.gemini_launcher.open_login()
+            self.run_page.append_log(
+                "Chrome profile cố định đã mở. Hãy đăng nhập Google/Gemini trong cửa sổ đó; "
+                "khi đăng nhập xong bấm 'Bắt đầu xử lý tất cả' để tool mở Gem URL và dịch SRT."
+            )
         except Exception as e:
             self.run_page.append_log(f"Lỗi mở Gemini tự động: {e}")
             QtWidgets.QMessageBox.warning(self, "Gemini Gem", str(e))
@@ -1353,11 +1381,10 @@ class VideoBatchWorkflowWindow(QtWidgets.QWidget):
             reply = QtWidgets.QMessageBox.question(
                 self,
                 "Xác nhận dùng Chrome",
-                "Chrome + Gemini Gem sẽ dùng Chrome/Edge mặc định đang đăng nhập của bạn.\n\n"
-                "Tool sẽ upload từng SRT, gửi yêu cầu dịch, bấm tải code, lưu thành *_vi.srt, "
-                "sau đó dùng file dịch để render video.\n\n"
-                "Nếu Chrome đang mở sẵn mà tool không điều khiển được, hãy đóng hết Chrome rồi bấm 'Mở Gemini Gem' "
-                "để tool mở lại Chrome mặc định với quyền tự động.\n\n"
+                "Chrome + Gemini Gem sẽ dùng một Chrome profile cố định của tool.\n\n"
+                "Trước khi chạy, hãy bấm 'Mở Gemini Gem' và đăng nhập Google/Gemini trong cửa sổ Chrome đó. "
+                "Khi bấm Yes, tool sẽ mở Gem URL, upload từng SRT, tải kết quả thành *_vi.srt rồi render video.\n\n"
+                "Nếu cửa sổ Chrome automation cũ bị lỗi, hãy đóng cửa sổ đó rồi bấm 'Mở Gemini Gem' lại.\n\n"
                 "Tiếp tục?",
                 QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
                 QtWidgets.QMessageBox.StandardButton.Yes,
