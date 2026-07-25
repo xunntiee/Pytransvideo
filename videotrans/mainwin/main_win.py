@@ -7,7 +7,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from PySide6.QtCore import QEvent
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QMainWindow
+from PySide6.QtWidgets import QMainWindow, QStackedWidget
 from videotrans.configure import config
 config.init_run()
 from videotrans.configure.config import tr, params, settings, app_cfg, logger, ROOT_DIR
@@ -30,6 +30,12 @@ class MainWindow(BindSignalsMixin, WinformMixin, LifecycleMixin, QMainWindow, Ui
         self.resize(width, height)
         self.setupUi(self)
         self.callback("SetupUI end...")
+
+        self.main_workspace_page = self.takeCentralWidget()
+        self.page_stack = QStackedWidget(self)
+        self.page_stack.setObjectName("main_page_stack")
+        self.page_stack.addWidget(self.main_workspace_page)
+        self.setCentralWidget(self.page_stack)
 
         self.worker_threads = []
         self.width = width

@@ -149,6 +149,7 @@ class TaskCfgTTS(TaskCfgBase):
     align_sub_audio: bool = True  # 是否强制对齐字幕和声音
     tts_sync_strategy: str = "auto"  # auto/audio/video/balanced/subtitle/custom
     tts_sync_snap_frame: bool = True  # snap subtitle/video timing to frame boundaries when video exists
+    tts_threads: int = 0  # 0 uses the global setting; >0 overrides it for this task
 
 
 # 字幕翻译

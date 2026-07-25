@@ -192,6 +192,7 @@ class DubbingSrt(BaseTask):
                 "volume": self.cfg.volume,
                 "pitch": self.cfg.pitch,
                 "tts_type": int(self.cfg.tts_type),
+                "tts_threads": self.cfg.tts_threads,
                 "filename": f"{self.cfg.cache_folder}/dubb-{i}-{_key}.wav"}
             queue_tts.append(tmp_dict)
 
@@ -229,7 +230,7 @@ class DubbingSrt(BaseTask):
         from videotrans.util.help_ffmpeg import runffmpeg
         # 只有一行
         if len(self.queue_tts) < 2:
-            if len(self.queue_tts) == 1 and self.cfg.tts_type != tts.EDGE_TTS:
+            if len(self.queue_tts) == 1:
                 runffmpeg(['-y', '-i', self.queue_tts[0]['filename'], '-b:a', '128k', self.cfg.target_wav])
             return
 

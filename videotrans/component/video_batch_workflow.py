@@ -29,7 +29,7 @@ from videotrans.util import tools
 
 
 SRT_EXTENSIONS = "Subtitle files (*.srt);;All files (*)"
-PLAN_VERSION = 1
+PLAN_VERSION = 3
 
 
 def _norm_stem(path):
@@ -183,7 +183,7 @@ def _make_batch_item(index, srt="", video=""):
         "srt": str(srt).replace("\\", "/") if srt else "",
         "video": str(video).replace("\\", "/") if video else "",
         "translated_srt": "",
-        "status": "Sẵn sàng" if srt and video else ("Thiếu video" if srt else "Thiếu SRT"),
+        "status": ("Sẵn sàng" if srt and video else ("Thiếu video" if srt else ("Sẵn sàng - tự lấy SRT" if video else "Thiếu video"))),
         "edit": {},
     }
 
@@ -279,9 +279,9 @@ class BatchWorkflowWorker(QThread):
     def run(self):
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            runnable = [it for it in self.items if it.get("srt") and it.get("video")]
+            runnable = [it for it in self.items if it.get("video")]
             if not runnable:
-                raise RuntimeError("Không có cặp SRT + video hợp lệ.")
+                raise RuntimeError("Không có video hợp lệ.")
             plan_path = self.output_dir / "batch_vietsub_plan.json"
             self._write_plan(plan_path)
             self.log.emit(f"Đã lưu plan: {plan_path}")
@@ -298,6 +298,7 @@ class BatchWorkflowWorker(QThread):
             self.failed.emit(str(e))
 
     def _write_plan(self, plan_path):
+        Path(plan_path).parent.mkdir(parents=True, exist_ok=True)
         plan_path.write_text(
             json.dumps(
                 {
@@ -311,76 +312,44 @@ class BatchWorkflowWorker(QThread):
             encoding="utf-8",
         )
 
-    def _process_item(self, item, offset, total):
-        video = Path(item["video"])
-        srt = Path(item["srt"])
-        item_dir = self.output_dir / _safe_name(video.stem)
-        item_dir.mkdir(parents=True, exist_ok=True)
-        self.log.emit(f"[{offset}/{total}] Bắt đầu xử lý: {video.name}")
-        self.log.emit(f"[{offset}/{total}] Thư mục video: {item_dir}")
-        source_srt = item_dir / f"{_safe_name(srt.stem)}.source.srt"
-        source_srt.write_text(_read_text(srt), encoding="utf-8")
-        item["source_srt"] = str(source_srt).replace("\\", "/")
-        item["status"] = "Đã copy SRT nguồn"
-        self.log.emit(f"[{offset}/{total}] {video.name}: đã copy SRT nguồn -> {source_srt.name}")
+    def _artifact_ready(self, path):
+        artifact = Path(path)
+        if self.ai_config.get("force_rebuild"):
+            return False
+        return artifact.is_file() and artifact.stat().st_size > 0
 
-        translated_srt = self._translate_item_if_needed(item, srt, item_dir, offset, total)
-        if translated_srt:
-            item["translated_srt"] = str(translated_srt).replace("\\", "/")
-            item["status"] = "Đã dịch SRT"
-            self.log.emit(f"[{offset}/{total}] {video.name}: SRT dịch -> {translated_srt}")
-        else:
-            self.log.emit(f"[{offset}/{total}] {video.name}: không bật dịch Gemini, dùng SRT gốc để burn subtitle.")
-
-        edit = item.get("edit") or {}
-        info = tools.get_video_info(str(video))
-        width, height = info.get("width", 0), info.get("height", 0)
-        if not edit.get("region"):
-            edit.update(_default_edit_for_video(width, height))
-
-        working_video = video
-        if edit.get("enabled", True):
-            output_video = item_dir / f"{_safe_name(video.stem)}_edited.mp4"
-            command = build_batch_edit_command(str(video), str(output_video), edit, (width, height))
-            item["status"] = "Đang che/blur video"
-            self.log.emit(f"[{offset}/{total}] {video.name}: bắt đầu che/blur vùng sub cũ...")
-            self._run_ffmpeg(command)
-            working_video = output_video
-            item["edited_video"] = str(output_video).replace("\\", "/")
-            item["status"] = "Đã edit video"
-            self.log.emit(f"[{offset}/{total}] {video.name}: edit xong -> {output_video}")
-        else:
-            self.log.emit(f"[{offset}/{total}] {video.name}: bỏ qua che/blur video.")
-
-        subtitle_style = edit.get("subtitle") or _default_subtitle_style(width, height)
-        if subtitle_style.get("enabled", True):
-            subtitle_source = Path(item.get("translated_srt") or srt)
-            if subtitle_source.exists():
-                ass_path = item_dir / f"{_safe_name(video.stem)}_styled.ass"
-                final_video = item_dir / f"{_safe_name(video.stem)}_subtitled.mp4"
-                item["status"] = "Đang tạo ASS subtitle"
-                _write_ass_from_srt(subtitle_source, ass_path, subtitle_style, (width, height))
-                item["ass_subtitle"] = str(ass_path).replace("\\", "/")
-                self.log.emit(f"[{offset}/{total}] {video.name}: đã tạo subtitle ASS -> {ass_path.name}")
-                item["status"] = "Đang burn subtitle"
-                self.log.emit(f"[{offset}/{total}] {video.name}: bắt đầu burn subtitle mới...")
-                self._run_ffmpeg(build_burn_subtitle_command(str(working_video), str(final_video), ass_path))
-                item["final_video"] = str(final_video).replace("\\", "/")
-                item["status"] = "Hoàn tất"
-                self.log.emit(f"[{offset}/{total}] {video.name}: đã burn subtitle -> {final_video}")
-            else:
-                item["status"] = "Thiếu SRT để burn subtitle"
-                self.log.emit(f"[{offset}/{total}] {video.name}: không thấy SRT để burn subtitle: {subtitle_source}")
-        else:
-            item["final_video"] = str(working_video).replace("\\", "/")
-            item["status"] = "Hoàn tất"
-            self.log.emit(f"[{offset}/{total}] {video.name}: subtitle mới đang tắt, file cuối -> {working_video}")
+    def _mark_stage(self, item, stage, artifact="", status="completed", detail=""):
+        data = {"status": status}
+        if artifact:
+            data["artifact"] = str(artifact).replace("\\", "/")
+        if detail:
+            data["detail"] = str(detail)
+        item.setdefault("stages", {})[stage] = data
+        self._write_plan(self.output_dir / "batch_vietsub_plan.json")
 
     def _translate_item_if_needed(self, item, srt, item_dir, offset, total):
-        if self.ai_config.get("translation_mode") != "chrome_gemini_gem":
+        mode = self.ai_config.get("translation_mode")
+        if mode == "api_llm":
+            from videotrans.process.batch_pipeline import translate_srt_api
+
+            item["status"] = "\u0110ang d\u1ecbch qua API / LLM"
+            self.log.emit(f"[{offset}/{total}] D\u1ecbch API/LLM: {Path(srt).name}")
+            result = translate_srt_api(
+                srt,
+                item_dir,
+                source_language=self.ai_config.get("source_language"),
+                target_language=self.ai_config.get("subtitle_language"),
+                translate_type=self.ai_config.get("translate_type", 0),
+                force=bool(self.ai_config.get("force_retranslate")),
+            )
+            if result:
+                self.log.emit(f"[{offset}/{total}] D\u1ecbch API/LLM xong: {Path(result).name}")
+            return result
+
+        if mode != "chrome_gemini_gem":
             return None
         if self.isInterruptionRequested():
-            raise RuntimeError("Đã dừng trước khi dịch Gemini.")
+            raise RuntimeError("\u0110\u00e3 d\u1eebng tr\u01b0\u1edbc khi d\u1ecbch Gemini.")
         from videotrans.component.gemini_browser_automation import GeminiBrowserAutomation
 
         if not self.gemini:
@@ -389,11 +358,253 @@ class BatchWorkflowWorker(QThread):
                 log=self.log.emit,
             )
         target = Path(item_dir) / f"{_safe_name(Path(srt).stem)}_vi.srt"
-        item["status"] = "Đang dịch Gemini"
-        self.log.emit(f"[{offset}/{total}] Dịch Gemini: {Path(srt).name} -> {target}")
-        result = self.gemini.translate_srt(srt, target, force=bool(self.ai_config.get("force_retranslate")))
+        item["status"] = "\u0110ang d\u1ecbch Gemini"
+        self.log.emit(f"[{offset}/{total}] D\u1ecbch Gemini: {Path(srt).name} -> {target}")
+        result = self.gemini.translate_srt(
+            srt,
+            target,
+            force=bool(self.ai_config.get("force_retranslate")),
+        )
         self.log.emit(f"[{offset}/{total}] Gemini xong: {Path(result).name}")
         return result
+
+    def _process_item_pipeline(self, item, offset, total):
+        from videotrans.process.batch_pipeline import (
+            build_dub_mux_command,
+            dub_srt,
+            language_code,
+            transcribe_video,
+        )
+
+        video = Path(item.get("video") or "")
+        if not video.is_file():
+            raise RuntimeError(f"Thi\u1ebfu video \u0111\u1ea7u v\u00e0o: {video}")
+
+        item_dir = self.output_dir / _safe_name(video.stem)
+        item_dir.mkdir(parents=True, exist_ok=True)
+        self.log.emit(f"[{offset}/{total}] B\u1eaft \u0111\u1ea7u pipeline: {video.name}")
+
+        source_srt = item_dir / f"{_safe_name(video.stem)}.source.srt"
+        source_value = item.get("srt")
+        if source_value:
+            supplied_srt = Path(source_value)
+            if not supplied_srt.is_file():
+                raise RuntimeError(f"SRT kh\u00f4ng t\u1ed3n t\u1ea1i: {supplied_srt}")
+            if not self._artifact_ready(source_srt):
+                source_srt.write_text(_read_text(supplied_srt), encoding="utf-8")
+            self._mark_stage(item, "recognition", source_srt, detail="D\u00f9ng SRT \u0111\u00e3 cung c\u1ea5p")
+        else:
+            if not self.ai_config.get("auto_stt", True):
+                raise RuntimeError("Video ch\u01b0a c\u00f3 SRT v\u00e0 t\u00ednh n\u0103ng t\u1ef1 nh\u1eadn d\u1ea1ng \u0111ang t\u1eaft.")
+            if self._artifact_ready(source_srt):
+                self.log.emit(f"[{offset}/{total}] D\u00f9ng l\u1ea1i SRT \u0111\u00e3 nh\u1eadn d\u1ea1ng: {source_srt.name}")
+            else:
+                item["status"] = "\u0110ang nh\u1eadn d\u1ea1ng gi\u1ecdng n\u00f3i"
+                self.log.emit(f"[{offset}/{total}] T\u00e1ch audio v\u00e0 nh\u1eadn d\u1ea1ng subtitle...")
+                recognized_srt = transcribe_video(
+                    video,
+                    item_dir / "recognition",
+                    source_language=self.ai_config.get("source_language", "auto"),
+                    recogn_type=self.ai_config.get("recogn_type", 0),
+                    model_name=self.ai_config.get("recogn_model", ""),
+                    remove_noise=bool(self.ai_config.get("stt_remove_noise", False)),
+                    enable_diariz=bool(self.ai_config.get("stt_diarization", False)),
+                    nums_diariz=self.ai_config.get("stt_speakers", 0),
+                    is_cuda=bool(self.ai_config.get("stt_cuda", False)),
+                    force=bool(self.ai_config.get("force_rebuild", False)),
+                )
+                source_srt.write_text(_read_text(recognized_srt), encoding="utf-8")
+            item["recognized_srt"] = source_srt.as_posix()
+            self._mark_stage(item, "recognition", source_srt)
+
+        item["source_srt"] = source_srt.as_posix()
+        self._mark_stage(item, "source", source_srt)
+
+        translated_srt = self._translate_item_if_needed(item, source_srt, item_dir, offset, total)
+        if translated_srt:
+            translated_srt = Path(translated_srt)
+            item["translated_srt"] = translated_srt.as_posix()
+            self._mark_stage(item, "translate", translated_srt)
+        else:
+            translated_srt = None
+            self._mark_stage(item, "translate", source_srt, detail="Gi\u1eef nguy\u00ean SRT ngu\u1ed3n")
+
+        info = tools.get_video_info(str(video))
+        width, height = info.get("width", 0), info.get("height", 0)
+        edit = item.get("edit") or {}
+        if not edit.get("region"):
+            defaults = _default_edit_for_video(width, height)
+            defaults.update(edit)
+            edit = defaults
+            item["edit"] = edit
+
+        working_video = video
+        if edit.get("enabled", True):
+            edited_video = item_dir / f"{_safe_name(video.stem)}_edited.mp4"
+            if not self._artifact_ready(edited_video):
+                item["status"] = "\u0110ang che/blur video"
+                self.log.emit(f"[{offset}/{total}] Che/blur subtitle c\u0169...")
+                command = build_batch_edit_command(str(video), str(edited_video), edit, (width, height))
+                self._run_ffmpeg(command)
+            else:
+                self.log.emit(f"[{offset}/{total}] D\u00f9ng l\u1ea1i video \u0111\u00e3 edit: {edited_video.name}")
+            working_video = edited_video
+            item["edited_video"] = edited_video.as_posix()
+            self._mark_stage(item, "edit", edited_video)
+        else:
+            self._mark_stage(item, "edit", video, detail="B\u1ecf qua edit")
+
+        subtitle_source = translated_srt or source_srt
+        subtitle_style = edit.get("subtitle") or _default_subtitle_style(width, height)
+        if subtitle_style.get("enabled", True):
+            ass_path = item_dir / f"{_safe_name(video.stem)}_styled.ass"
+            subtitled_video = item_dir / f"{_safe_name(video.stem)}_subtitled.mp4"
+            if not self._artifact_ready(subtitled_video):
+                _write_ass_from_srt(subtitle_source, ass_path, subtitle_style, (width, height))
+                item["status"] = "\u0110ang burn subtitle"
+                self.log.emit(f"[{offset}/{total}] Burn subtitle m\u1edbi...")
+                self._run_ffmpeg(build_burn_subtitle_command(str(working_video), str(subtitled_video), ass_path))
+            else:
+                self.log.emit(f"[{offset}/{total}] D\u00f9ng l\u1ea1i video \u0111\u00e3 burn sub: {subtitled_video.name}")
+            working_video = subtitled_video
+            item["ass_subtitle"] = ass_path.as_posix()
+            self._mark_stage(item, "subtitle", subtitled_video)
+        else:
+            self._mark_stage(item, "subtitle", working_video, detail="Kh\u00f4ng burn subtitle")
+
+        voice_language = self.ai_config.get("voice_language")
+        voice_code = language_code(voice_language)
+        source_code = language_code(self.ai_config.get("source_language"))
+        if voice_code and not translated_srt and voice_code != source_code:
+            raise RuntimeError("Ng\u00f4n ng\u1eef l\u1ed3ng ti\u1ebfng kh\u00e1c SRT ngu\u1ed3n. H\u00e3y b\u1eadt d\u1ecbch subtitle tr\u01b0\u1edbc khi l\u1ed3ng ti\u1ebfng.")
+
+        if voice_code:
+            dubbed_audio = dub_srt(
+                subtitle_source,
+                item_dir / "dubbing",
+                target_language=voice_language,
+                tts_type=self.ai_config.get("tts_type", 0),
+                voice_role=self.ai_config.get("voice", ""),
+                sync_mode=self.ai_config.get("sync_mode", "auto"),
+                threads=self.ai_config.get("tts_threads", 1),
+                is_cuda=bool(self.ai_config.get("is_cuda", False)),
+                force=bool(self.ai_config.get("force_rebuild", False)),
+            )
+            item["dubbed_audio"] = Path(dubbed_audio).as_posix()
+            self._mark_stage(item, "dubbing", dubbed_audio)
+
+            audio_mode = self.ai_config.get("audio_mode", "replace")
+            if audio_mode != "voice_only":
+                dubbed_video = item_dir / f"{_safe_name(video.stem)}_final_dubbed.mp4"
+                if not self._artifact_ready(dubbed_video):
+                    item["status"] = "\u0110ang gh\u00e9p gi\u1ecdng \u0111\u1ecdc"
+                    self._run_ffmpeg(
+                        build_dub_mux_command(
+                            working_video,
+                            dubbed_audio,
+                            dubbed_video,
+                            audio_mode=audio_mode,
+                            has_original_audio=bool(info.get("streams_audio", 0)),
+                            original_volume=self.ai_config.get("original_volume", 0.15),
+                        )
+                    )
+                working_video = dubbed_video
+                self._mark_stage(item, "mux", dubbed_video)
+
+        item["final_video"] = Path(working_video).as_posix()
+        if self.ai_config.get("prepare_reup"):
+            self._prepare_publish_jobs(
+                item,
+                working_video,
+                video,
+                item_dir,
+                width,
+                height,
+                offset,
+                total,
+            )
+
+        item["status"] = "Ho\u00e0n t\u1ea5t"
+        self._mark_stage(item, "complete", working_video)
+        self.log.emit(f"[{offset}/{total}] Ho\u00e0n t\u1ea5t: {working_video}")
+
+    def _prepare_publish_jobs(self, item, working_video, source_video, item_dir, width, height, offset, total):
+        from videotrans.process.batch_pipeline import build_vertical_reframe_command
+        from videotrans.process.publish_queue import (
+            SHORT_FORM_PLATFORMS,
+            enqueue_publish_job,
+            normalize_platforms,
+        )
+
+        selected_platforms = normalize_platforms(self.ai_config.get("reup_platforms") or [])
+        queue_path = self.output_dir / "reup_queue.json"
+        title = str(
+            self.ai_config.get("reup_title")
+            or item.get("source_title")
+            or Path(working_video).stem
+        ).replace("{stem}", source_video.stem)
+        variants = []
+        short_platforms = [platform for platform in selected_platforms if platform in SHORT_FORM_PLATFORMS]
+        other_platforms = [platform for platform in selected_platforms if platform not in SHORT_FORM_PLATFORMS]
+        should_reframe = (
+            bool(self.ai_config.get("reup_vertical", True))
+            and width
+            and height
+            and width > height
+            and short_platforms
+        )
+        if should_reframe:
+            vertical_video = item_dir / f"{_safe_name(Path(working_video).stem)}_9x16.mp4"
+            if not self._artifact_ready(vertical_video):
+                item["status"] = "Đang tạo bản 9:16"
+                self.log.emit(f"[{offset}/{total}] Tạo bản 9:16 cho short-form...")
+                self._run_ffmpeg(
+                    build_vertical_reframe_command(
+                        working_video,
+                        vertical_video,
+                        strategy=self.ai_config.get("reup_vertical_strategy", "blur"),
+                    )
+                )
+            item["vertical_video"] = vertical_video.as_posix()
+            self._mark_stage(item, "vertical_reframe", vertical_video)
+            variants.append((vertical_video, short_platforms, 1080, 1920))
+            if other_platforms:
+                variants.append((Path(working_video), other_platforms, width, height))
+        else:
+            variants.append((Path(working_video), selected_platforms, width, height))
+
+        jobs = []
+        created_count = 0
+        for variant_video, platforms, variant_width, variant_height in variants:
+            publish_job, created = enqueue_publish_job(
+                queue_path,
+                variant_video,
+                platforms=platforms,
+                title=title,
+                description=self.ai_config.get("reup_description", ""),
+                hashtags=self.ai_config.get("reup_hashtags", ""),
+                source_url=item.get("source_url", ""),
+                width=variant_width,
+                height=variant_height,
+            )
+            jobs.append(publish_job["id"])
+            created_count += int(created)
+
+        item["publish_job_ids"] = jobs
+        item["publish_job_id"] = jobs[0]
+        item["publish_queue"] = queue_path.as_posix()
+        detail = f"Reup queue: {created_count} job mới, {len(jobs) - created_count} job dùng lại"
+        self._mark_stage(item, "publish_prepare", queue_path, detail=detail)
+        self.log.emit(f"[{offset}/{total}] {detail}: {', '.join(jobs)}")
+    def _process_item(self, item, offset, total):
+        try:
+            return self._process_item_pipeline(item, offset, total)
+        except Exception as exc:
+            item["status"] = f"L\u1ed7i: {exc}"
+            self._mark_stage(item, "failed", status="failed", detail=str(exc))
+            self.log.emit(f"[{offset}/{total}] L\u1ed7i: {exc}")
+            raise
+
 
     def _run_ffmpeg(self, command):
         final_args = [str(arg) for arg in command]
@@ -433,6 +644,7 @@ class BatchFilePage(QtWidgets.QWidget):
         super().__init__(parent)
         self.srt_files = []
         self.video_files = []
+        self.video_metadata = {}
         self.items = []
         self._build_ui()
         self._connect_signals()
@@ -457,7 +669,7 @@ class BatchFilePage(QtWidgets.QWidget):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
-        title = QtWidgets.QLabel("Batch video: nhiều SRT + nhiều video")
+        title = QtWidgets.QLabel("Batch video: có thể chọn video kèm SRT hoặc chỉ video")
         title.setObjectName("batchTitle")
         title.setStyleSheet("font-size:20px;font-weight:700;color:#dce8f8")
         root.addWidget(title)
@@ -643,20 +855,60 @@ class BatchFilePage(QtWidgets.QWidget):
         self._save_default_dirs()
         self._rematch()
 
+    def add_video_files(self, files):
+        supported = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".m4v"}
+        combined = list(self.video_files)
+        seen = {str(Path(item).resolve()).casefold() for item in combined}
+        for entry in files or []:
+            metadata = dict(entry) if isinstance(entry, dict) else {}
+            file_path = metadata.get("video") or metadata.get("file") or entry
+            path = Path(file_path)
+            if not path.is_file() or path.suffix.lower() not in supported:
+                continue
+            resolved = path.resolve()
+            key = str(resolved).casefold()
+            if key not in seen:
+                seen.add(key)
+                combined.append(resolved.as_posix())
+            if metadata:
+                self.video_metadata[key] = {
+                    "source_url": str(metadata.get("source_url") or ""),
+                    "source_title": str(metadata.get("source_title") or ""),
+                }
+        self.video_files = combined
+        if self.video_files:
+            self.video_default_dir.setText(Path(self.video_files[-1]).parent.as_posix())
+            self._save_default_dirs()
+        self._rematch()
+
     def _clear(self):
         self.srt_files = []
         self.video_files = []
+        self.video_metadata = {}
         self.items = []
         self._render_table()
         self.items_changed.emit(self.items)
 
     def _rematch(self):
-        old_edits = {(_norm_stem(it.get("srt") or it.get("video"))): it.get("edit", {}) for it in self.items}
+        old_data = {
+            _norm_stem(it.get("srt") or it.get("video")): {
+                "edit": it.get("edit", {}),
+                "source_url": it.get("source_url", ""),
+                "source_title": it.get("source_title", ""),
+            }
+            for it in self.items
+        }
         self.items = match_srt_video_files(self.srt_files, self.video_files)
         for item in self.items:
             key = _norm_stem(item.get("srt") or item.get("video"))
-            if key in old_edits:
-                item["edit"] = old_edits[key]
+            previous = old_data.get(key, {})
+            for field in ("edit", "source_url", "source_title"):
+                if previous.get(field):
+                    item[field] = previous[field]
+            if item.get("video"):
+                video_key = str(Path(item["video"]).resolve()).casefold()
+                metadata = self.video_metadata.get(video_key, {})
+                item.update({field: value for field, value in metadata.items() if value})
         self._render_table()
         self.items_changed.emit(self.items)
 
@@ -1160,6 +1412,48 @@ class AiVoicePage(QtWidgets.QWidget):
         title.setStyleSheet("font-size:20px;font-weight:700;color:#dce8f8")
         root.addWidget(title)
 
+        stt_box = QtWidgets.QGroupBox("Nh\u1eadn d\u1ea1ng subtitle khi video thi\u1ebfu SRT")
+        stt_grid = QtWidgets.QGridLayout(stt_box)
+        stt_grid.setContentsMargins(10, 24, 10, 10)
+        stt_grid.setHorizontalSpacing(8)
+        stt_grid.setVerticalSpacing(8)
+        self.auto_stt = QtWidgets.QCheckBox("T\u1ef1 t\u00e1ch audio v\u00e0 t\u1ea1o SRT")
+        self.auto_stt.setChecked(True)
+        self.recogn_engine = QtWidgets.QComboBox()
+        self.recogn_model = QtWidgets.QComboBox()
+        self.recogn_model.setEditable(True)
+        self.stt_cuda = QtWidgets.QCheckBox("CUDA")
+        self.stt_cuda.setChecked(bool(params.get("stt_cuda", False)))
+        self.stt_remove_noise = QtWidgets.QCheckBox("Gi\u1ea3m nhi\u1ec5u")
+        self.stt_remove_noise.setChecked(bool(params.get("stt_remove_noise", False)))
+        self.stt_diarization = QtWidgets.QCheckBox("T\u00e1ch ng\u01b0\u1eddi n\u00f3i")
+        self.stt_diarization.setChecked(bool(params.get("stt_enable_diariz", False)))
+        self.stt_speakers = QtWidgets.QSpinBox()
+        self.stt_speakers.setRange(0, 20)
+        self.stt_speakers.setSpecialValueText("T\u1ef1 ph\u00e1t hi\u1ec7n")
+        self.stt_speakers.setValue(max(0, int(params.get("stt_nums_diariz", 0) or 0)))
+        try:
+            from videotrans import recognition
+
+            self.recogn_engine.addItems(recognition.RECOGN_NAME_LIST)
+            self.recogn_engine.setCurrentIndex(int(params.get("stt_recogn_type", 0) or 0))
+        except Exception:
+            self.recogn_engine.addItems(["faster-whisper", "openai-whisper"])
+        self.recogn_engine.currentIndexChanged.connect(self._recogn_type_changed)
+        self.auto_stt.toggled.connect(self._stt_enabled_changed)
+        self.stt_diarization.toggled.connect(self.stt_speakers.setEnabled)
+        stt_grid.addWidget(self.auto_stt, 0, 0, 1, 2)
+        stt_grid.addWidget(QtWidgets.QLabel("Engine STT"), 1, 0)
+        stt_grid.addWidget(self.recogn_engine, 1, 1)
+        stt_grid.addWidget(QtWidgets.QLabel("Model"), 1, 2)
+        stt_grid.addWidget(self.recogn_model, 1, 3)
+        stt_grid.addWidget(self.stt_cuda, 2, 0)
+        stt_grid.addWidget(self.stt_remove_noise, 2, 1)
+        stt_grid.addWidget(self.stt_diarization, 2, 2)
+        stt_grid.addWidget(self.stt_speakers, 2, 3)
+        root.addWidget(stt_box)
+        self._recogn_type_changed(self.recogn_engine.currentIndex())
+        self._stt_enabled_changed(self.auto_stt.isChecked())
         box = QtWidgets.QGroupBox("Thiết lập dịch")
         grid = QtWidgets.QGridLayout(box)
         grid.setContentsMargins(10, 24, 10, 10)
@@ -1168,6 +1462,14 @@ class AiVoicePage(QtWidgets.QWidget):
         self.model_mode = QtWidgets.QComboBox()
         self.model_mode.addItems(["Chrome + Gemini Gem", "API / LLM"])
         self.model_mode.currentIndexChanged.connect(self._mode_changed)
+        self.translate_engine = QtWidgets.QComboBox()
+        try:
+            from videotrans import translator
+
+            self.translate_engine.addItems(translator.TRANSLASTE_NAME_LIST)
+            self.translate_engine.setCurrentIndex(int(params.get("translate_type", 0) or 0))
+        except Exception:
+            self.translate_engine.addItems(["Google", "Microsoft"])
         self.gem_url = QtWidgets.QLineEdit(self.file_page.gem_url.text())
         self.gem_url.textChanged.connect(self.file_page.gem_url.setText)
         self.note = QtWidgets.QLabel(
@@ -1177,6 +1479,8 @@ class AiVoicePage(QtWidgets.QWidget):
         self.note.setWordWrap(True)
         grid.addWidget(QtWidgets.QLabel("Dịch qua"), 0, 0)
         grid.addWidget(self.model_mode, 0, 1)
+        grid.addWidget(QtWidgets.QLabel("Provider"), 0, 2)
+        grid.addWidget(self.translate_engine, 0, 3, 1, 2)
         grid.addWidget(QtWidgets.QLabel("Gem URL"), 1, 0)
         grid.addWidget(self.gem_url, 1, 1, 1, 4)
         grid.addWidget(self.note, 2, 0, 1, 5)
@@ -1195,6 +1499,14 @@ class AiVoicePage(QtWidgets.QWidget):
         self.thread_count = QtWidgets.QSpinBox()
         self.thread_count.setRange(1, 16)
         self.thread_count.setValue(1)
+        self.audio_mode = QtWidgets.QComboBox()
+        self.audio_mode.addItem("Thay audio b\u1eb1ng gi\u1ecdng \u0111\u1ecdc", "replace")
+        self.audio_mode.addItem("Tr\u1ed9n nh\u1ecf audio g\u1ed1c", "mix")
+        self.audio_mode.addItem("Ch\u1ec9 t\u1ea1o file gi\u1ecdng \u0111\u1ecdc", "voice_only")
+        self.original_volume = QtWidgets.QSpinBox()
+        self.original_volume.setRange(0, 100)
+        self.original_volume.setValue(15)
+        self.original_volume.setSuffix("%")
         voice_grid.addWidget(QtWidgets.QLabel("TTS"), 0, 0)
         voice_grid.addWidget(self.tts_engine, 0, 1)
         voice_grid.addWidget(QtWidgets.QLabel("Voice"), 0, 2)
@@ -1203,6 +1515,10 @@ class AiVoicePage(QtWidgets.QWidget):
         voice_grid.addWidget(self.sync_mode, 1, 1)
         voice_grid.addWidget(QtWidgets.QLabel("Luồng TTS"), 1, 2)
         voice_grid.addWidget(self.thread_count, 1, 3)
+        voice_grid.addWidget(QtWidgets.QLabel("Audio g\u1ed1c"), 2, 0)
+        voice_grid.addWidget(self.audio_mode, 2, 1)
+        voice_grid.addWidget(QtWidgets.QLabel("\u00c2m l\u01b0\u1ee3ng g\u1ed1c"), 2, 2)
+        voice_grid.addWidget(self.original_volume, 2, 3)
         try:
             from videotrans import tts
 
@@ -1210,24 +1526,129 @@ class AiVoicePage(QtWidgets.QWidget):
         except Exception:
             self.tts_engine.addItems(["Edge TTS", "Azure TTS", "Gemini TTS"])
         root.addWidget(voice_box)
+
+        reup_box = QtWidgets.QGroupBox("Chuẩn bị reup")
+        reup_grid = QtWidgets.QGridLayout(reup_box)
+        reup_grid.setContentsMargins(10, 24, 10, 10)
+        self.prepare_reup = QtWidgets.QCheckBox("Tạo job reup sau khi xử lý xong")
+        self.reup_platforms = QtWidgets.QLineEdit("youtube, tiktok, douyin, bilibili")
+        self.reup_platforms.setPlaceholderText("youtube, tiktok, douyin, bilibili, kuaishou, xiaohongshu")
+        self.reup_title = QtWidgets.QLineEdit()
+        self.reup_title.setPlaceholderText("Tiêu đề; để trống sẽ dùng tên file")
+        self.reup_description = QtWidgets.QLineEdit()
+        self.reup_description.setPlaceholderText("Mô tả dùng chung cho job reup")
+        self.reup_hashtags = QtWidgets.QLineEdit("#vietsub #viral")
+        self.reup_vertical = QtWidgets.QCheckBox("Tự tạo bản 9:16 cho nền tảng short-form")
+        self.reup_vertical.setChecked(True)
+        self.reup_vertical_strategy = QtWidgets.QComboBox()
+        self.reup_vertical_strategy.addItem("Nền blur - giữ đủ khung hình", "blur")
+        self.reup_vertical_strategy.addItem("Crop giữa", "crop")
+        self.reup_vertical_strategy.addItem("Viền đen", "pad")
+        reup_grid.addWidget(self.prepare_reup, 0, 0, 1, 4)
+        reup_grid.addWidget(QtWidgets.QLabel("Nền tảng"), 1, 0)
+        reup_grid.addWidget(self.reup_platforms, 1, 1, 1, 3)
+        reup_grid.addWidget(QtWidgets.QLabel("Tiêu đề"), 2, 0)
+        reup_grid.addWidget(self.reup_title, 2, 1, 1, 3)
+        reup_grid.addWidget(QtWidgets.QLabel("Mô tả"), 3, 0)
+        reup_grid.addWidget(self.reup_description, 3, 1, 1, 3)
+        reup_grid.addWidget(QtWidgets.QLabel("Hashtag"), 4, 0)
+        reup_grid.addWidget(self.reup_hashtags, 4, 1, 1, 3)
+        reup_grid.addWidget(self.reup_vertical, 5, 0, 1, 2)
+        reup_grid.addWidget(self.reup_vertical_strategy, 5, 2, 1, 2)
+        self.prepare_reup.toggled.connect(self._reup_enabled_changed)
+        root.addWidget(reup_box)
         root.addStretch()
+        try:
+            self.tts_engine.setCurrentIndex(int(params.get("tts_type", 0) or 0))
+        except (TypeError, ValueError):
+            self.tts_engine.setCurrentIndex(0)
+        saved_voice = str(params.get("voice_role", "") or "").strip()
+        if saved_voice not in {"No", "-"}:
+            self.voice.setText(saved_voice)
+        self.thread_count.setValue(max(1, min(int(settings.get("dubbing_thread", 1) or 1), 16)))
+        self._mode_changed(self.model_mode.currentIndex())
+        self._reup_enabled_changed(self.prepare_reup.isChecked())
+
+    def _recogn_type_changed(self, index):
+        current = self.recogn_model.currentText().strip()
+        saved = str(params.get("stt_model_name", "") or "").strip()
+        models = []
+        try:
+            from videotrans import recognition
+
+            models = recognition.get_model_by_type(int(index))
+        except Exception:
+            pass
+        self.recogn_model.clear()
+        self.recogn_model.addItems([str(model) for model in models])
+        preferred = current or saved
+        if preferred:
+            self.recogn_model.setCurrentText(preferred)
+
+    def _stt_enabled_changed(self, enabled):
+        for widget in (
+            self.recogn_engine,
+            self.recogn_model,
+            self.stt_cuda,
+            self.stt_remove_noise,
+            self.stt_diarization,
+        ):
+            widget.setEnabled(bool(enabled))
+        self.stt_speakers.setEnabled(bool(enabled) and self.stt_diarization.isChecked())
+
+    def _reup_enabled_changed(self, enabled):
+        for widget in (
+            self.reup_platforms,
+            self.reup_title,
+            self.reup_description,
+            self.reup_hashtags,
+            self.reup_vertical,
+            self.reup_vertical_strategy,
+        ):
+            widget.setEnabled(bool(enabled))
 
     def _mode_changed(self, index):
         self.file_page.radio_chrome.setChecked(index == 0)
         self.file_page.radio_api.setChecked(index == 1)
+        self.translate_engine.setEnabled(index == 1)
+        self.gem_url.setEnabled(index == 0)
 
     def ai_config(self):
         cfg = self.file_page.ai_config()
         cfg.update(
             {
+                "prepare_reup": self.prepare_reup.isChecked(),
+                "reup_platforms": [
+                    value.strip()
+                    for value in self.reup_platforms.text().split(",")
+                    if value.strip()
+                ],
+                "reup_title": self.reup_title.text().strip(),
+                "reup_description": self.reup_description.text().strip(),
+                "reup_hashtags": self.reup_hashtags.text().strip(),
+                "reup_vertical": self.reup_vertical.isChecked(),
+                "reup_vertical_strategy": self.reup_vertical_strategy.currentData() or "blur",
+                "auto_stt": self.auto_stt.isChecked(),
+                "recogn_type": self.recogn_engine.currentIndex(),
+                "recogn_engine": self.recogn_engine.currentText(),
+                "recogn_model": self.recogn_model.currentText().strip(),
+                "stt_cuda": self.stt_cuda.isChecked(),
+                "stt_remove_noise": self.stt_remove_noise.isChecked(),
+                "stt_diarization": self.stt_diarization.isChecked(),
+                "stt_speakers": self.stt_speakers.value(),
                 "model_mode_label": self.model_mode.currentText(),
+                "translate_type": self.translate_engine.currentIndex(),
                 "tts_engine": self.tts_engine.currentText(),
+                "tts_type": self.tts_engine.currentIndex(),
                 "voice": self.voice.text().strip(),
                 "sync_mode": self.sync_mode.currentText(),
                 "tts_threads": self.thread_count.value(),
+                "audio_mode": self.audio_mode.currentData() or "replace",
+                "original_volume": self.original_volume.value() / 100.0,
             }
         )
         return cfg
+
 
 
 class RunPage(QtWidgets.QWidget):
@@ -1250,19 +1671,26 @@ class RunPage(QtWidgets.QWidget):
         self.output_dir = QtWidgets.QLineEdit(str(DEFAULT_OUTPUT_DIR / "batch").replace("\\", "/"))
         self.choose_output = QtWidgets.QPushButton("Chọn thư mục")
         self.open_gem_btn = QtWidgets.QPushButton("Mở Gemini Gem")
+        self.open_reup_btn = QtWidgets.QPushButton("Quản lý reup")
         self.start_btn = QtWidgets.QPushButton("Bắt đầu xử lý tất cả")
         self.stop_btn = QtWidgets.QPushButton("Dừng")
         self.stop_btn.setDisabled(True)
         self.force_retranslate = QtWidgets.QCheckBox("Dịch lại _vi.srt đã có")
         self.force_retranslate.setToolTip("Bật mục này nếu muốn upload lại SRT lên Gemini dù file *_vi.srt đã tồn tại.")
+        self.force_rebuild = QtWidgets.QCheckBox("L\u00e0m l\u1ea1i edit, subtitle v\u00e0 gi\u1ecdng \u0111\u1ecdc")
+        self.force_rebuild.setToolTip(
+            "B\u1eadt khi \u0111\u00e3 \u0111\u1ed5i v\u00f9ng blur, style subtitle, voice ho\u1eb7c c\u00e1ch gh\u00e9p audio."
+        )
         row.addWidget(QtWidgets.QLabel("Lưu tại"))
         row.addWidget(self.output_dir, 1)
         row.addWidget(self.choose_output)
         row.addWidget(self.open_gem_btn)
+        row.addWidget(self.open_reup_btn)
         row.addWidget(self.stop_btn)
         row.addWidget(self.start_btn)
         root.addLayout(row)
         root.addWidget(self.force_retranslate)
+        root.addWidget(self.force_rebuild)
 
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 100)
@@ -1287,6 +1715,7 @@ class RunPage(QtWidgets.QWidget):
         self.start_btn.setDisabled(busy)
         self.stop_btn.setDisabled(not busy)
         self.force_retranslate.setDisabled(busy)
+        self.force_rebuild.setDisabled(busy)
 
 
 class VideoBatchWorkflowWindow(QtWidgets.QWidget):
@@ -1296,6 +1725,7 @@ class VideoBatchWorkflowWindow(QtWidgets.QWidget):
         self.resize(1280, 820)
         self.worker = None
         self.gemini_launcher = None
+        self.reup_window = None
         self._build_ui()
         self._connect_signals()
 
@@ -1335,17 +1765,23 @@ class VideoBatchWorkflowWindow(QtWidgets.QWidget):
         self.tabs.addTab(self.single_editor, "Từng video")
         self.tabs.addTab(self.batch_page, "Batch video")
 
-        self.batch_tabs.addTab(self.file_page, "1. Chọn SRT + video")
+        self.batch_tabs.addTab(self.file_page, "1. Chọn video / SRT")
         self.batch_tabs.addTab(self.batch_editor, "2. Edit hàng loạt")
         self.batch_tabs.addTab(self.ai_page, "3. AI + Giọng đọc")
         self.batch_tabs.addTab(self.run_page, "4. Chạy tất cả")
 
+    def add_video_files(self, files):
+        self.file_page.add_video_files(files)
+        self._show_batch_page(self.file_page)
+        self.show()
+        self.activateWindow()
     def _connect_signals(self):
         self.file_page.items_changed.connect(self.batch_editor.set_items)
         self.batch_editor.items_changed.connect(lambda items: self.file_page.set_items(items, emit=False))
         self.file_page.open_batch_editor.connect(lambda: self._show_batch_page(self.batch_editor))
         self.file_page.open_ai_setup.connect(lambda: self._show_batch_page(self.ai_page))
         self.run_page.open_gem_btn.clicked.connect(self._open_gem)
+        self.run_page.open_reup_btn.clicked.connect(self._open_reup_queue)
         self.run_page.start_requested.connect(self._start_all)
         self.run_page.stop_requested.connect(self._stop)
 
@@ -1353,6 +1789,17 @@ class VideoBatchWorkflowWindow(QtWidgets.QWidget):
         self.tabs.setCurrentWidget(self.batch_page)
         self.batch_tabs.setCurrentWidget(page)
 
+    def _open_reup_queue(self):
+        from videotrans.component.publish_queue_window import PublishQueueWindow
+
+        output_dir = self.run_page.output_dir.text().strip() or str(DEFAULT_OUTPUT_DIR / "batch")
+        queue_path = Path(output_dir) / "reup_queue.json"
+        if not self.reup_window:
+            self.reup_window = PublishQueueWindow(queue_path=queue_path)
+        else:
+            self.reup_window.set_queue_path(queue_path)
+        self.reup_window.show()
+        self.reup_window.activateWindow()
     def _open_gem(self):
         url = self.file_page.gem_url.text().strip() or "https://gemini.google.com/gem/90edf2642605"
         try:
@@ -1372,11 +1819,12 @@ class VideoBatchWorkflowWindow(QtWidgets.QWidget):
         if self.worker and self.worker.isRunning():
             return
         items = self.batch_editor.current_items()
-        if not any(it.get("srt") and it.get("video") for it in items):
-            QtWidgets.QMessageBox.warning(self, "Batch video", "Hãy chọn SRT và video hợp lệ trước.")
+        if not any(it.get("video") for it in items):
+            QtWidgets.QMessageBox.warning(self, "Batch video", "Hãy chọn ít nhất một video hợp lệ trước.")
             return
         ai_config = self.ai_page.ai_config()
         ai_config["force_retranslate"] = self.run_page.force_retranslate.isChecked()
+        ai_config["force_rebuild"] = self.run_page.force_rebuild.isChecked()
         if ai_config.get("translation_mode") == "chrome_gemini_gem":
             reply = QtWidgets.QMessageBox.question(
                 self,
