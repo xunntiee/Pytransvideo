@@ -16,6 +16,12 @@ from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QTextCursor
 
 from videotrans.configure.config import HOME_DIR, ROOT_DIR, app_cfg, settings
+from videotrans.process.download_sources import (
+    build_download_jobs,
+    detect_platform,
+    extract_urls,
+    platform_options,
+)
 
 
 DEFAULT_DOWNLOAD_DIR = Path(ROOT_DIR) / "input"
@@ -27,6 +33,7 @@ ROLE_DOWNLOAD_URL = Qt.UserRole + 1
 ROLE_COVER_URL = Qt.UserRole + 2
 ROLE_FILE_PATH = Qt.UserRole + 3
 ROLE_SOURCE = Qt.UserRole + 4
+ROLE_SOURCE_URL = Qt.UserRole + 5
 
 FORMAT_OPTIONS = {
     "MP4 tốt nhất": {
@@ -842,6 +849,7 @@ def _build_ydl_options(
     playlist_mode,
     playlist_limit,
     custom_filename="",
+    platform_id="generic",
     progress_hook=None,
     emit=None,
 ):
@@ -891,6 +899,7 @@ def _build_ydl_options(
         opts["download_archive"] = str(output_path / ".pyvideotrans-download-archive.txt")
     if playlist_mode and playlist_limit > 0:
         opts["playlistend"] = int(playlist_limit)
+    opts.update(platform_options(platform_id))
     return opts
 
 
@@ -964,6 +973,7 @@ class ChannelLoadWorker(QThread):
                 opts["cookiesfrombrowser"] = (self.cookie_browser,)
             if app_cfg.proxy:
                 opts["proxy"] = app_cfg.proxy
+            opts.update(platform_options(self.url))
 
             self.event.emit({"type": "log", "text": "Đang đọc danh sách video của kênh..."})
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1075,7 +1085,17 @@ class VideoDownloadWorker(QThread):
         parent=None,
     ):
         super().__init__(parent)
-        self.items = items or [{"url": url} for url in urls]
+        source_items = items or build_download_jobs(urls)
+        self.items = []
+        for source_item in source_items:
+            item = dict(source_item)
+            if item.get("url"):
+                platform = detect_platform(item["url"])
+                item.setdefault("platform_id", platform.id)
+                item.setdefault("platform_name", platform.name)
+                item.setdefault("adapter", platform.adapter)
+                item.setdefault("needs_cookie", platform.needs_cookie)
+            self.items.append(item)
         self.urls = [item.get("url", "") for item in self.items if item.get("url")]
         self.output_dir = output_dir
         self.format_name = format_name
@@ -1237,8 +1257,8 @@ class VideoDownloadWorker(QThread):
                     except DownloadCancelled:
                         raise
                     except Exception as e:
-                        self.event.emit({"type": "item_status", "url": item.get("url", ""), "status": "Lỗi"})
-                        self.event.emit({"type": "log", "text": f"Lỗi tải Douyin {item.get('url')}: {e}"})
+                        self.event.emit({"type": "log", "text": f"Douyin native lỗi, chuyển sang yt-dlp: {e}"})
+                        normal_urls.append(item["url"])
                 elif item.get("source") == "douyin":
                     self.event.emit({"type": "item_status", "url": item.get("url", ""), "status": "Không có link tải"})
                     self.event.emit({"type": "log", "text": f"Douyin không trả link media cho: {item.get('title') or item.get('url')}"})
@@ -1279,22 +1299,43 @@ class VideoDownloadWorker(QThread):
                 )
                 return
 
-            opts = _build_ydl_options(
-                output_dir=self.output_dir,
-                format_name=self.format_name,
-                threads=self.threads,
-                cookie_browser=self.cookie_browser,
-                cookie_file=self.cookie_file,
-                use_archive=self.use_archive,
-                playlist_mode=self.playlist_mode,
-                playlist_limit=self.playlist_limit,
-                custom_filename=self.custom_filename if len(self.items) == 1 and not direct_items else "",
-                progress_hook=self._progress_hook,
-                emit=self.event.emit,
-            )
-            self.event.emit({"type": "log", "text": f"Bắt đầu tải {len(normal_urls)} URL bằng yt-dlp..."})
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download(normal_urls)
+            platform_groups = {}
+            for url in normal_urls:
+                platform = detect_platform(url)
+                platform_groups.setdefault(platform.id, {"platform": platform, "urls": []})["urls"].append(url)
+
+            for platform_id, group in platform_groups.items():
+                platform = group["platform"]
+                group_urls = group["urls"]
+                if platform.needs_cookie and not self.cookie_browser and not self.cookie_file:
+                    self.event.emit(
+                        {
+                            "type": "log",
+                            "text": f"{platform.name}: nên chọn cookie trình duyệt/cookies.txt nếu link công khai bị chặn.",
+                        }
+                    )
+                opts = _build_ydl_options(
+                    output_dir=self.output_dir,
+                    format_name=self.format_name,
+                    threads=self.threads,
+                    cookie_browser=self.cookie_browser,
+                    cookie_file=self.cookie_file,
+                    use_archive=self.use_archive,
+                    playlist_mode=self.playlist_mode,
+                    playlist_limit=self.playlist_limit,
+                    custom_filename=self.custom_filename if len(self.items) == 1 and not direct_items else "",
+                    platform_id=platform_id,
+                    progress_hook=self._progress_hook,
+                    emit=self.event.emit,
+                )
+                self.event.emit(
+                    {
+                        "type": "log",
+                        "text": f"{platform.name}: tải {len(group_urls)} URL qua {platform.adapter}...",
+                    }
+                )
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download(group_urls)
             total = direct_count + len(normal_urls)
             self.event.emit({"type": "done", "text": f"Hoàn tất tải {total} video."})
         except DownloadCancelled as e:
@@ -1304,8 +1345,12 @@ class VideoDownloadWorker(QThread):
 
 
 class VideoDownloadWindow(QtWidgets.QWidget):
-    def __init__(self, parent=None):
+    pipeline_requested = Signal(list)
+    back_requested = Signal()
+
+    def __init__(self, parent=None, embedded=False):
         super().__init__(parent)
+        self.embedded = bool(embedded)
         self.worker = None
         self.load_worker = None
         self.search_worker = None
@@ -1313,7 +1358,8 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self._channel_url_rows = {}
         self._search_url_rows = {}
         self.setWindowTitle("Trình tải video")
-        self.setMinimumSize(920, 620)
+        if not self.embedded:
+            self.setMinimumSize(920, 620)
         self._build_ui()
         self._restore_saved_options()
 
@@ -1324,6 +1370,10 @@ class VideoDownloadWindow(QtWidgets.QWidget):
             self.tabs.setCurrentIndex(1 if mode == "channel" else 0)
 
     def closeEvent(self, event):
+        if self.embedded:
+            self.back_requested.emit()
+            event.ignore()
+            return
         if self._has_running_task():
             QtWidgets.QMessageBox.warning(self, "Trình tải video", "Đang có tác vụ chạy. Hãy bấm Dừng trước khi đóng.")
             event.ignore()
@@ -1349,12 +1399,22 @@ class VideoDownloadWindow(QtWidgets.QWidget):
 
     def _build_ui(self):
         root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        margin = 18 if self.embedded else 12
+        root.setContentsMargins(margin, margin, margin, margin)
+        root.setSpacing(10)
+
+        header = QtWidgets.QHBoxLayout()
+        self.back_btn = QtWidgets.QPushButton("← Quay lại")
+        self.back_btn.setVisible(self.embedded)
+        self.back_btn.setMinimumHeight(34)
+        self.back_btn.clicked.connect(self.back_requested.emit)
+        header.addWidget(self.back_btn)
 
         title = QtWidgets.QLabel("Trình tải video")
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        root.addWidget(title)
+        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        header.addWidget(title)
+        header.addStretch()
+        root.addLayout(header)
 
         self.tabs = QtWidgets.QTabWidget()
         self.url_tab = QtWidgets.QWidget()
@@ -1363,7 +1423,11 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.tabs.addTab(self.url_tab, "Tải theo URL")
         self.tabs.addTab(self.channel_tab, "Tải video kênh")
         self.tabs.addTab(self.search_tab, "Tìm Douyin")
-        root.addWidget(self.tabs, 1)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(False)
+        self.tabs.tabBar().setExpanding(True)
+        self.tabs.setMinimumHeight(420 if self.embedded else 370)
+        root.addWidget(self.tabs, 3)
 
         self._build_url_tab()
         self._build_channel_tab()
@@ -1383,25 +1447,58 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.finished_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         self.finished_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
         self.finished_table.setColumnWidth(2, 90)
-        self.finished_table.setMaximumHeight(150)
+        self.finished_table.setMinimumHeight(80 if self.embedded else 70)
+        self.finished_table.setMaximumHeight(110 if self.embedded else 90)
         self.finished_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.finished_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         root.addWidget(self.finished_table)
 
+        finished_actions = QtWidgets.QHBoxLayout()
+        self.send_pipeline_btn = QtWidgets.QPushButton("Đưa video đã tải vào pipeline")
+        self.send_pipeline_btn.setToolTip("Mở Batch video và tự thêm toàn bộ file đã tải xong.")
+        finished_actions.addStretch()
+        finished_actions.addWidget(self.send_pipeline_btn)
+        root.addLayout(finished_actions)
+        self.send_pipeline_btn.clicked.connect(self._send_finished_to_pipeline)
+
         self.log_edit = QtWidgets.QPlainTextEdit()
         self.log_edit.setReadOnly(True)
-        self.log_edit.setMaximumHeight(140)
+        self.log_edit.setMinimumHeight(80 if self.embedded else 70)
+        self.log_edit.setMaximumHeight(110 if self.embedded else 90)
         self.log_edit.setPlaceholderText("Log tải video")
         root.addWidget(self.log_edit)
 
+    def _create_scrollable_tab_layout(self, tab, key):
+        outer = QtWidgets.QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QtWidgets.QScrollArea(tab)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        content = QtWidgets.QWidget()
+        content.setMinimumWidth(860)
+        layout = QtWidgets.QVBoxLayout(content)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(10 if self.embedded else 8)
+        layout.setSizeConstraint(QtWidgets.QLayout.SetMinimumSize)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        setattr(self, f"{key}_scroll", scroll)
+        setattr(self, f"{key}_content", content)
+        return layout
+
     def _build_url_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.url_tab)
-        layout.setSpacing(8)
+        layout = self._create_scrollable_tab_layout(self.url_tab, "url")
 
         layout.addWidget(QtWidgets.QLabel("URLs (mỗi dòng một URL video):"))
         self.url_input = QtWidgets.QPlainTextEdit()
         self.url_input.setPlaceholderText("https://www.youtube.com/watch?v=...\nhttps://www.tiktok.com/@.../video/...")
-        self.url_input.setMinimumHeight(160)
+        self.url_input.setFixedHeight(130)
         layout.addWidget(self.url_input)
 
         options = self._create_common_options(prefix="url")
@@ -1419,6 +1516,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         buttons.addWidget(self.url_stop_btn)
         buttons.addWidget(self.url_start_btn)
         layout.addLayout(buttons)
+        layout.addStretch()
 
         self.url_paste_btn.clicked.connect(self._paste_urls)
         self.url_clear_btn.clicked.connect(self.url_input.clear)
@@ -1426,13 +1524,12 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.url_stop_btn.clicked.connect(self._stop_current_task)
 
     def _build_channel_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.channel_tab)
-        layout.setSpacing(8)
+        layout = self._create_scrollable_tab_layout(self.channel_tab, "channel")
 
         layout.addWidget(QtWidgets.QLabel("URL kênh / profile / playlist:"))
         self.channel_input = QtWidgets.QPlainTextEdit()
         self.channel_input.setPlaceholderText("Dán URL kênh tại đây. Để giới hạn = 0 nếu muốn tải toàn bộ video của kênh.")
-        self.channel_input.setMaximumHeight(80)
+        self.channel_input.setFixedHeight(70)
         layout.addWidget(self.channel_input)
 
         options = self._create_common_options(prefix="channel")
@@ -1457,13 +1554,22 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.channel_table = QtWidgets.QTableWidget(0, 8)
         self._style_table_header(self.channel_table)
         self.channel_table.setHorizontalHeaderLabels(["Chọn", "#", "Tiêu đề", "Nguồn", "URL", "Trạng thái", "File", "Preview"])
-        self.channel_table.horizontalHeader().setStretchLastSection(False)
-        self.channel_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        self.channel_table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+        channel_header = self.channel_table.horizontalHeader()
+        channel_header.setStretchLastSection(False)
+        channel_header.setMinimumSectionSize(48)
+        for column in (0, 1, 3, 5, 6, 7):
+            channel_header.setSectionResizeMode(column, QtWidgets.QHeaderView.Fixed)
+        channel_header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        channel_header.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
         self.channel_table.setColumnWidth(0, 60)
-        self.channel_table.setColumnWidth(1, 55)
+        self.channel_table.setColumnWidth(1, 50)
+        self.channel_table.setColumnWidth(3, 90)
         self.channel_table.setColumnWidth(5, 110)
-        self.channel_table.setColumnWidth(7, 90)
+        self.channel_table.setColumnWidth(6, 120)
+        self.channel_table.setColumnWidth(7, 82)
+        self.channel_table.setMinimumHeight(150)
+        self.channel_table.setWordWrap(False)
+        self.channel_table.setTextElideMode(Qt.ElideRight)
         self.channel_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.channel_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         layout.addWidget(self.channel_table, 1)
@@ -1490,8 +1596,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.channel_stop_btn.clicked.connect(self._stop_current_task)
 
     def _build_search_tab(self):
-        layout = QtWidgets.QVBoxLayout(self.search_tab)
-        layout.setSpacing(8)
+        layout = self._create_scrollable_tab_layout(self.search_tab, "search")
 
         tools = QtWidgets.QHBoxLayout()
         self.search_keyword = QtWidgets.QLineEdit()
@@ -1535,15 +1640,24 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         self.search_table.setHorizontalHeaderLabels(
             ["Chọn", "#", "Viral", "Tiêu đề", "Nguồn", "Tương tác", "URL", "Trạng thái", "File", "Preview"]
         )
-        self.search_table.horizontalHeader().setStretchLastSection(False)
-        self.search_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
-        self.search_table.horizontalHeader().setSectionResizeMode(6, QtWidgets.QHeaderView.Stretch)
+        search_header = self.search_table.horizontalHeader()
+        search_header.setStretchLastSection(False)
+        search_header.setMinimumSectionSize(48)
+        for column in (0, 1, 2, 4, 5, 7, 8, 9):
+            search_header.setSectionResizeMode(column, QtWidgets.QHeaderView.Fixed)
+        search_header.setSectionResizeMode(3, QtWidgets.QHeaderView.Stretch)
+        search_header.setSectionResizeMode(6, QtWidgets.QHeaderView.Stretch)
         self.search_table.setColumnWidth(0, 60)
-        self.search_table.setColumnWidth(1, 55)
-        self.search_table.setColumnWidth(2, 90)
-        self.search_table.setColumnWidth(5, 230)
-        self.search_table.setColumnWidth(7, 110)
-        self.search_table.setColumnWidth(9, 90)
+        self.search_table.setColumnWidth(1, 50)
+        self.search_table.setColumnWidth(2, 80)
+        self.search_table.setColumnWidth(4, 90)
+        self.search_table.setColumnWidth(5, 210)
+        self.search_table.setColumnWidth(7, 105)
+        self.search_table.setColumnWidth(8, 120)
+        self.search_table.setColumnWidth(9, 82)
+        self.search_table.setMinimumHeight(150)
+        self.search_table.setWordWrap(False)
+        self.search_table.setTextElideMode(Qt.ElideRight)
         self.search_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.search_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         layout.addWidget(self.search_table, 1)
@@ -1571,6 +1685,16 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         layout = QtWidgets.QGridLayout()
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
+        layout.setColumnMinimumWidth(0, 95)
+        layout.setColumnMinimumWidth(1, 175)
+        layout.setColumnMinimumWidth(2, 65)
+        layout.setColumnMinimumWidth(3, 150)
+        layout.setColumnMinimumWidth(4, 150)
+        layout.setColumnMinimumWidth(5, 145)
+        layout.setColumnStretch(1, 2)
+        layout.setColumnStretch(3, 1)
+        layout.setColumnStretch(4, 1)
+        layout.setColumnStretch(5, 1)
 
         format_combo = QtWidgets.QComboBox()
         format_combo.addItems(FORMAT_OPTIONS.keys())
@@ -1748,12 +1872,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
             settings.save()
 
     def _parse_urls(self, text):
-        urls = []
-        for line in text.splitlines():
-            line = line.strip()
-            if line and _is_http_url(line):
-                urls.append(line)
-        return urls
+        return extract_urls(text)
 
     def _normalize_download_urls(self, urls):
         normalized = []
@@ -2027,7 +2146,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         elif event_type == "item_done":
             self._mark_channel_row_done(event.get("url", ""), event.get("filepath", ""))
             self._mark_search_row_done(event.get("url", ""), event.get("filepath", ""))
-            self._add_finished_file(event.get("title", ""), event.get("filepath", ""))
+            self._add_finished_file(event.get("title", ""), event.get("filepath", ""), event.get("url", ""))
             self._append_log(event.get("text", ""))
         elif event_type == "log":
             self._append_log(event.get("text", ""))
@@ -2166,13 +2285,15 @@ class VideoDownloadWindow(QtWidgets.QWidget):
                 preview_btn.setEnabled(Path(filepath).exists())
                 preview_btn.setToolTip(str(filepath))
 
-    def _add_finished_file(self, title, filepath):
+    def _add_finished_file(self, title, filepath, source_url=""):
         if not filepath or not Path(filepath).exists():
             return
         path = str(Path(filepath))
         for row in range(self.finished_table.rowCount()):
             item = self.finished_table.item(row, 1)
             if item and item.data(ROLE_FILE_PATH) == path:
+                if source_url:
+                    item.setData(ROLE_SOURCE_URL, source_url)
                 return
 
         row = self.finished_table.rowCount()
@@ -2184,6 +2305,7 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         file_item = QtWidgets.QTableWidgetItem(Path(path).name)
         file_item.setToolTip(path)
         file_item.setData(ROLE_FILE_PATH, path)
+        file_item.setData(ROLE_SOURCE_URL, source_url)
         self.finished_table.setItem(row, 1, file_item)
 
         preview_btn = QtWidgets.QPushButton("Xem")
@@ -2191,6 +2313,34 @@ class VideoDownloadWindow(QtWidgets.QWidget):
         preview_btn.clicked.connect(lambda _checked=False, file_path=path: self._open_file_path(file_path))
         self.finished_table.setCellWidget(row, 2, preview_btn)
 
+    def _finished_files(self):
+        files = []
+        seen = set()
+        for row in range(self.finished_table.rowCount()):
+            item = self.finished_table.item(row, 1)
+            path = item.data(ROLE_FILE_PATH) if item else ""
+            if path and Path(path).is_file():
+                resolved = Path(path).resolve()
+                key = str(resolved).casefold()
+                if key not in seen:
+                    seen.add(key)
+                    title_item = self.finished_table.item(row, 0)
+                    files.append(
+                        {
+                            "video": resolved.as_posix(),
+                            "source_url": item.data(ROLE_SOURCE_URL) or "",
+                            "source_title": title_item.text().strip() if title_item else resolved.stem,
+                        }
+                    )
+        return files
+
+    def _send_finished_to_pipeline(self):
+        files = self._finished_files()
+        if not files:
+            QtWidgets.QMessageBox.information(self, "Trình tải video", "Chưa có video tải xong để đưa vào pipeline.")
+            return
+        self.pipeline_requested.emit(files)
+        self._set_status(f"Đã chuyển {len(files)} video sang batch pipeline.")
     def _open_file_path(self, filepath):
         if not filepath or not Path(filepath).exists():
             QtWidgets.QMessageBox.information(self, "Trình tải video", "File không còn tồn tại.")

@@ -27,15 +27,31 @@ class WinformMixin:
         if name in ('download_url', 'download_channel', 'download_search'):
             from videotrans.component.video_downloader import VideoDownloadWindow
 
-            key = 'video_downloader'
-            winobj = app_cfg.child_forms.get(key)
+            winobj = getattr(self, "video_downloader_page", None)
             if not winobj:
-                winobj = VideoDownloadWindow()
-                app_cfg.child_forms[key] = winobj
+                winobj = VideoDownloadWindow(parent=self.page_stack, embedded=True)
+                self.video_downloader_page = winobj
+                self.page_stack.addWidget(winobj)
+
+                def open_downloads_in_pipeline(files):
+                    from videotrans.component.video_batch_workflow import VideoBatchWorkflowWindow
+
+                    batch_key = "clipvideo"
+                    batch_window = app_cfg.child_forms.get(batch_key)
+                    if not batch_window:
+                        batch_window = VideoBatchWorkflowWindow()
+                        app_cfg.child_forms[batch_key] = batch_window
+                    batch_window.add_video_files(files)
+
+                winobj.pipeline_requested.connect(open_downloads_in_pipeline)
+                winobj.back_requested.connect(self.show_main_workspace)
             mode = 'search' if name == 'download_search' else ('channel' if name == 'download_channel' else 'url')
             winobj.set_mode(mode)
-            winobj.show()
-            winobj.activateWindow()
+            self.page_stack.setCurrentWidget(winobj)
+            self.statusBar().hide()
+            self.setWindowTitle(f"{self.rawtitle} - Trình tải video")
+            self.showMaximized()
+            winobj.setFocus()
             return
 
         winobj = app_cfg.child_forms.get(name)
@@ -67,3 +83,11 @@ class WinformMixin:
             return
         from videotrans import winform
         return winform.get_win(name).openwin()
+
+    def show_main_workspace(self):
+        if hasattr(self, "page_stack") and hasattr(self, "main_workspace_page"):
+            self.page_stack.setCurrentWidget(self.main_workspace_page)
+        if self.statusBar():
+            self.statusBar().show()
+        if getattr(self, "rawtitle", ""):
+            self.setWindowTitle(self.rawtitle)

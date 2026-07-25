@@ -198,6 +198,10 @@ def run(*, queue_tts=None, language=None, uuid=None, play=False, is_test=False, 
         "tts_type": tts_type,
         "is_cuda": is_cuda
     }
+    threads = queue_tts[0].get("tts_threads") if queue_tts else None
+    if threads:
+        kwargs["dub_nums"] = max(1, min(int(threads), 16))
+
 
     _cls: Union[Type[BaseTTS], None] = get_class(tts_type, "tts", _ID_NAME_DICT)
     if not _cls:
